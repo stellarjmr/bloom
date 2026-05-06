@@ -127,7 +127,7 @@ func WriteDefaultConfig(path string, force bool) error {
 }
 
 func DefaultConfigText() string {
-	return `# bloom config
+	return `# bm config
 
 [settings]
 progress_width = 24

@@ -5,9 +5,10 @@ LDFLAGS := -s -w -X github.com/stellarjmr/bloom/internal/bloom.Version=$(VERSION
 
 build:
 	mkdir -p bin
-	go build -ldflags="$(LDFLAGS)" -o bin/bloom-core ./cmd/bloom
-	cp bloom bm bin/
-	chmod +x bin/bloom bin/bm
+	rm -f bin/bloom bin/bloom-core
+	go build -ldflags="$(LDFLAGS)" -o bin/bm-core ./cmd/bloom
+	cp bm bin/
+	chmod +x bin/bm
 
 test:
 	go test ./...

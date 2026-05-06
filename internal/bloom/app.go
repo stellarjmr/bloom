@@ -39,7 +39,7 @@ func (a *App) Run(args []string) int {
 		a.printHelp()
 		return 0
 	case "-v", "--version", "version":
-		fmt.Fprintf(a.Out, "bloom %s\n", Version)
+		fmt.Fprintf(a.Out, "bm %s\n", Version)
 		return 0
 	case "config":
 		return a.runConfig(args[1:])
@@ -57,15 +57,15 @@ func (a *App) Run(args []string) int {
 }
 
 func (a *App) printHelp() {
-	fmt.Fprintln(a.Out, `bloom updates developer tools from one terminal command.
+	fmt.Fprintln(a.Out, `bm updates developer tools from one terminal command.
 
 Usage:
-  bloom update [--dry-run] [--only task] [--skip task] [--config path]
-  bloom list [--config path]
-  bloom doctor [--config path]
-  bloom config path
-  bloom config init [--force]
-  bloom --version
+  bm update [--dry-run] [--only task] [--skip task] [--config path]
+  bm list [--config path]
+  bm doctor [--config path]
+  bm config path
+  bm config init [--force]
+  bm --version
 
 Tasks:
   brew, cask, amp, yazi, nvim, mason, npm, cleanup`)
@@ -91,7 +91,7 @@ func (a *App) runConfig(args []string) int {
 		fmt.Fprintln(a.Out, path)
 		return 0
 	}
-	fmt.Fprintln(a.Err, "usage: bloom config path | bloom config init [--force]")
+	fmt.Fprintln(a.Err, "usage: bm config path | bm config init [--force]")
 	return 2
 }
 
@@ -226,12 +226,14 @@ func (a *App) runUpdate(args []string) int {
 		results = append(results, res)
 		progress.Render(i+1, len(tasks), res)
 		if res.Err != nil {
-			fmt.Fprintf(a.Err, "\n%s failed: %v\n", task.Name, res.Err)
+			progress.Finish()
+			fmt.Fprintf(a.Err, "%s failed: %v\n", task.Name, res.Err)
 			if res.Output != "" {
 				fmt.Fprintln(a.Err, strings.TrimSpace(res.Output))
 			}
 		}
 	}
+	progress.Finish()
 
 	failures := 0
 	summaries := 0

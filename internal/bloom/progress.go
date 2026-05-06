@@ -3,6 +3,7 @@ package bloom
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -15,27 +16,29 @@ const (
 )
 
 type Progress struct {
-	out io.Writer
-	cfg Config
+	out        io.Writer
+	cfg        Config
+	terminal   bool
+	lineActive bool
 }
 
-func NewProgress(out io.Writer, cfg Config) Progress {
-	return Progress{out: out, cfg: cfg}
+func NewProgress(out io.Writer, cfg Config) *Progress {
+	return &Progress{out: out, cfg: cfg, terminal: isTerminal(out)}
 }
 
-func (p Progress) Render(done, total int, result TaskResult) {
-	marker := "[ok]"
+func (p *Progress) Render(done, total int, result TaskResult) {
+	marker := "✓"
 	color := colorGreen
 	if result.Status == StatusSkipped {
-		marker = "[skip]"
+		marker = "·"
 		color = colorGray
 	}
 	if result.Status == StatusDryRun {
-		marker = "[dry]"
+		marker = "…"
 		color = colorCyan
 	}
 	if result.Err != nil {
-		marker = "[fail]"
+		marker = "✗"
 		color = colorRed
 	}
 
@@ -51,10 +54,23 @@ func (p Progress) Render(done, total int, result TaskResult) {
 	if message != "" {
 		message = " " + message
 	}
-	fmt.Fprintf(p.out, "%s %s%s%s %s%s\n", p.Bar(done, total), color, marker, reset, result.Name, message)
+	line := fmt.Sprintf("%s %s%s%s %s%s", p.Bar(done, total), color, marker, reset, result.Name, message)
+	if p.terminal {
+		fmt.Fprintf(p.out, "\r\033[K%s", line)
+		p.lineActive = true
+		return
+	}
+	fmt.Fprintln(p.out, line)
 }
 
-func (p Progress) Bar(done, total int) string {
+func (p *Progress) Finish() {
+	if p.terminal && p.lineActive {
+		fmt.Fprintln(p.out)
+		p.lineActive = false
+	}
+}
+
+func (p *Progress) Bar(done, total int) string {
 	width := p.cfg.ProgressWidth
 	if width <= 0 {
 		width = 24
@@ -79,4 +95,16 @@ func (p Progress) Bar(done, total int) string {
 		return fmt.Sprintf("[%s%s] %3d%%", filledBar, emptyBar, percent)
 	}
 	return fmt.Sprintf("[%s%s%s%s%s] %3d%%", colorGreen, filledBar, colorReset, colorGray, emptyBar+colorReset, percent)
+}
+
+func isTerminal(out io.Writer) bool {
+	file, ok := out.(*os.File)
+	if !ok || file == nil {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
