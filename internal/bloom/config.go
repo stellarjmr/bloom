@@ -24,9 +24,15 @@ type TaskConfig struct {
 	InstallHint string
 }
 
+var defaultTaskOrder = []string{"brew", "cask", "amp", "yazi", "nvim", "mason", "npm"}
+
+func DefaultTaskNames() []string {
+	return append([]string(nil), defaultTaskOrder...)
+}
+
 func DefaultConfig() Config {
 	return Config{
-		TaskOrder:     []string{"brew", "cask", "amp", "yazi", "nvim", "mason", "npm"},
+		TaskOrder:     DefaultTaskNames(),
 		ProgressWidth: 24,
 		Color:         true,
 		Tasks: map[string]TaskConfig{
@@ -128,49 +134,140 @@ func WriteDefaultConfig(path string, force bool) error {
 	return os.WriteFile(path, []byte(DefaultConfigText()), 0o644)
 }
 
+func SaveConfig(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(ConfigText(cfg)), 0o644)
+}
+
 func DefaultConfigText() string {
-	return `# bm config
+	return ConfigText(DefaultConfig())
+}
 
-[settings]
-progress_width = 24
-color = true
+func ConfigText(cfg Config) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "# bm config")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "[settings]")
+	fmt.Fprintf(&b, "progress_width = %d\n", cfg.ProgressWidth)
+	fmt.Fprintf(&b, "color = %s\n", formatBool(cfg.Color))
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "[tasks]")
+	fmt.Fprintf(&b, "order = %s\n", formatStringArray(cfg.TaskOrder))
 
-[tasks]
-order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
+	for _, name := range cfg.TaskOrder {
+		task := cfg.Tasks[name]
+		fmt.Fprintln(&b)
+		fmt.Fprintf(&b, "[tasks.%s]\n", name)
+		fmt.Fprintf(&b, "enabled = %s\n", formatBool(task.Enabled))
+		if taskSupportsPackages(name) {
+			fmt.Fprintf(&b, "include = %s\n", formatStringArray(task.Include))
+			fmt.Fprintf(&b, "exclude = %s\n", formatStringArray(task.Exclude))
+		}
+	}
 
-[tasks.brew]
-enabled = true
-include = []
-exclude = []
+	return b.String()
+}
 
-[tasks.cask]
-enabled = true
-include = []
-exclude = []
+func SetEnabledTasks(cfg *Config, enabled []string) error {
+	enabledSet := map[string]bool{}
+	for _, name := range enabled {
+		if !isDefaultTask(name) {
+			return fmt.Errorf("unknown task %q", name)
+		}
+		enabledSet[name] = true
+	}
 
-[tasks.amp]
-enabled = true
+	cfg.TaskOrder = DefaultTaskNames()
+	if cfg.Tasks == nil {
+		cfg.Tasks = map[string]TaskConfig{}
+	}
+	for _, name := range cfg.TaskOrder {
+		task := cfg.Tasks[name]
+		task.Enabled = enabledSet[name]
+		cfg.Tasks[name] = task
+	}
+	return nil
+}
 
-[tasks.yazi]
-enabled = true
-include = []
-exclude = []
+func SetTaskInclude(cfg *Config, name string, include []string) error {
+	if !isDefaultTask(name) {
+		return fmt.Errorf("unknown task %q", name)
+	}
+	if !taskSupportsPackages(name) {
+		return fmt.Errorf("task %q does not support package filters", name)
+	}
+	if cfg.Tasks == nil {
+		cfg.Tasks = map[string]TaskConfig{}
+	}
+	task := cfg.Tasks[name]
+	task.Include = uniqueStrings(include)
+	task.Exclude = nil
+	cfg.Tasks[name] = task
+	if !containsString(cfg.TaskOrder, name) {
+		cfg.TaskOrder = append(cfg.TaskOrder, name)
+	}
+	return nil
+}
 
-[tasks.nvim]
-enabled = true
-include = []
-exclude = []
+func taskSupportsPackages(name string) bool {
+	switch name {
+	case "brew", "cask", "yazi", "nvim", "mason", "npm":
+		return true
+	default:
+		return false
+	}
+}
 
-[tasks.mason]
-enabled = true
-include = []
-exclude = []
+func isDefaultTask(name string) bool {
+	for _, task := range defaultTaskOrder {
+		if task == name {
+			return true
+		}
+	}
+	return false
+}
 
-[tasks.npm]
-enabled = true
-include = []
-exclude = []
-`
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func formatBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func formatStringArray(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, strconv.Quote(value))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func parseSetting(cfg *Config, key, value string) error {

@@ -1,7 +1,9 @@
 package bloom
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +68,82 @@ func TestProgressBarNoColor(t *testing.T) {
 	want := "[━╸──────]  25%"
 	if bar != want {
 		t.Fatalf("bar = %q, want %q", bar, want)
+	}
+}
+
+type recordingRunner struct {
+	paths   map[string]bool
+	outputs map[string]CommandOutput
+	calls   []string
+}
+
+func (r *recordingRunner) LookPath(file string) (string, error) {
+	if r.paths[file] {
+		return "/bin/" + file, nil
+	}
+	return "", errNotFound
+}
+
+func (r *recordingRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	return r.outputs[call]
+}
+
+var errNotFound = &runnerError{"not found"}
+
+type runnerError struct {
+	msg string
+}
+
+func (e *runnerError) Error() string {
+	return e.msg
+}
+
+func TestRunBrewFormulaeUpdatesMetadataBeforeOutdated(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string]CommandOutput{
+			"brew update":                        {},
+			"brew outdated --quiet --formula":    {Stdout: "bloom\n"},
+			"brew list --formula --full-name":    {Stdout: "stellarjmr/tool/bloom\n"},
+			"brew upgrade stellarjmr/tool/bloom": {},
+		},
+	}
+
+	res := runBrewFormulae(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"brew update",
+		"brew outdated --quiet --formula",
+		"brew list --formula --full-name",
+		"brew upgrade stellarjmr/tool/bloom",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunBrewFormulaeDryRunDoesNotUpdateMetadata(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string]CommandOutput{
+			"brew outdated --quiet --formula": {Stdout: "bloom\n"},
+			"brew list --formula --full-name": {Stdout: "stellarjmr/tool/bloom\n"},
+		},
+	}
+
+	res := runBrewFormulae(context.Background(), r, UpdateOptions{DryRun: true, Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"brew outdated --quiet --formula",
+		"brew list --formula --full-name",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
 	}
 }

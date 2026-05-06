@@ -28,6 +28,7 @@ bm update --only nvim        # run one task
 bm update --skip npm         # skip a task
 bm list                      # list configured tasks
 bm doctor                    # show available and missing tools
+bm config                    # open the interactive config menu
 bm config path               # print config path
 bm config init               # create ~/.config/bloom/config.toml
 ```
@@ -45,6 +46,7 @@ The built-in task set mirrors the original `update-all.sh` workflow:
 - `npm`: global npm package updates
 
 Missing tools are skipped during `bm update` and are not counted in the progress total.
+For real Homebrew updates, `bm` refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
 
 ## Config
 
@@ -60,7 +62,7 @@ Create it with:
 bm config init
 ```
 
-The config supports task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update everything that exists. See `config.example.toml`.
+The config supports task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update everything that exists. Run `bm config` to manage tasks and package filters with a Space-select menu, or edit the TOML directly. See `config.example.toml`.
 
 ## Neovim
 

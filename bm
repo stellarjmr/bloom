@@ -85,12 +85,13 @@ read_key() {
 
   case "$key" in
   $'\n' | $'\r') echo "ENTER" ;;
+  ' ') echo "SPACE" ;;
   'q' | 'Q' | $'\x03') echo "QUIT" ;;
   'j' | 'J') echo "DOWN" ;;
   'k' | 'K') echo "UP" ;;
   'v' | 'V') echo "VERSION" ;;
   'm' | 'M' | '?') echo "HELP" ;;
-  [1-6]) echo "CHAR:$key" ;;
+  [1-9]) echo "CHAR:$key" ;;
   $'\x1b')
     if IFS= read -r -s -n 1 -t 1 rest 2>/dev/null && [[ "$rest" == "[" ]]; then
       if IFS= read -r -s -n 1 -t 1 rest2 2>/dev/null; then
@@ -147,7 +148,7 @@ draw_menu() {
   menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
   menu_option 2 "List         Show configured tasks" "$([[ $selected -eq 2 ]] && echo true || echo false)"
   menu_option 3 "Doctor       Check missing tools" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "Config       Show config path" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 4 "Config       Manage tasks and packages" "$([[ $selected -eq 4 ]] && echo true || echo false)"
   menu_option 5 "Init Config  Create default config" "$([[ $selected -eq 5 ]] && echo true || echo false)"
   menu_option 6 "Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
   printf '\n%b↑↓/jk | Enter | 1-6 | V Version | Q Quit%b\n\n' "$GRAY" "$NC"
@@ -162,6 +163,7 @@ show_help() {
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --only nvim" "$NC" "Run one task"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm list" "$NC" "List configured tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm doctor" "$NC" "Check missing tools"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm config" "$NC" "Manage tasks and packages"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm config path" "$NC" "Print config path"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm config init" "$NC" "Create default config"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm --version" "$NC" "Show version"
@@ -173,11 +175,7 @@ run_menu_selection() {
   1) exec "$0" update ;;
   2) exec "$0" list ;;
   3) exec "$0" doctor ;;
-  4)
-    clear_screen
-    core config path
-    exit 0
-    ;;
+  4) exec "$0" config ;;
   5) exec "$0" config init ;;
   6)
     clear_screen
@@ -232,6 +230,283 @@ interactive_menu() {
   done
 }
 
+MS_VALUES=()
+MS_LABELS=()
+MS_SELECTED=()
+MS_RESULT_VALUES=()
+
+terminal_height() {
+  local height
+  height="$(stty size 2>/dev/null | awk '{print $1}' || true)"
+  [[ "$height" =~ ^[0-9]+$ ]] || height=24
+  printf '%s\n' "$height"
+}
+
+multi_select() {
+  local title="$1"
+  local total="${#MS_VALUES[@]}"
+  MS_RESULT_VALUES=()
+  if [[ "$total" -eq 0 ]]; then
+    clear_screen
+    printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
+    printf '%bNo items available%b\n\n' "$GRAY" "$NC"
+    printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    return 1
+  fi
+
+  local selected=0 top=0 key visible height max_visible start end i count mark
+  trap 'show_cursor; exit 130' INT TERM
+  hide_cursor
+  while true; do
+    height="$(terminal_height)"
+    max_visible=$((height - 6))
+    [[ "$max_visible" -lt 1 ]] && max_visible=1
+    [[ "$max_visible" -gt 16 ]] && max_visible=16
+    [[ "$selected" -lt "$top" ]] && top="$selected"
+    if [[ "$selected" -ge $((top + max_visible)) ]]; then
+      top=$((selected - max_visible + 1))
+    fi
+    start="$top"
+    end=$((top + max_visible - 1))
+    [[ "$end" -ge $((total - 1)) ]] && end=$((total - 1))
+
+    count=0
+    for ((i = 0; i < total; i++)); do
+      [[ "${MS_SELECTED[i]}" == "true" ]] && count=$((count + 1))
+    done
+
+    clear_screen
+    printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
+    for ((i = start; i <= end; i++)); do
+      mark="○"
+      [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
+      if [[ "$i" -eq "$selected" ]]; then
+        printf '%b> %s %s%b\n' "$CYAN" "$mark" "${MS_LABELS[i]}" "$NC"
+      else
+        printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
+      fi
+    done
+    printf '\n%b↑↓/jk | Space | Enter Save | Q Cancel%b\n' "$GRAY" "$NC"
+
+    key="$(read_key)"
+    case "$key" in
+    "UP") ((selected > 0)) && selected=$((selected - 1)) ;;
+    "DOWN") ((selected < total - 1)) && selected=$((selected + 1)) ;;
+    "SPACE")
+      if [[ "${MS_SELECTED[selected]}" == "true" ]]; then
+        MS_SELECTED[selected]=false
+      else
+        MS_SELECTED[selected]=true
+      fi
+      ;;
+    "ENTER")
+      show_cursor
+      for ((i = 0; i < total; i++)); do
+        [[ "${MS_SELECTED[i]}" == "true" ]] && MS_RESULT_VALUES+=("${MS_VALUES[i]}")
+      done
+      return 0
+      ;;
+    "QUIT")
+      show_cursor
+      return 1
+      ;;
+    esac
+    drain_pending_input
+  done
+}
+
+select_one() {
+  local title="$1"
+  local total="${#MS_VALUES[@]}"
+  MS_RESULT_VALUES=()
+  [[ "$total" -eq 0 ]] && return 1
+
+  local selected=0 key i
+  trap 'show_cursor; exit 130' INT TERM
+  hide_cursor
+  while true; do
+    clear_screen
+    printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
+    for ((i = 0; i < total; i++)); do
+      if [[ "$i" -eq "$selected" ]]; then
+        printf '%b> %s%b\n' "$CYAN" "${MS_LABELS[i]}" "$NC"
+      else
+        printf '  %s\n' "${MS_LABELS[i]}"
+      fi
+    done
+    printf '\n%b↑↓/jk | Enter | Q Cancel%b\n' "$GRAY" "$NC"
+
+    key="$(read_key)"
+    case "$key" in
+    "UP") ((selected > 0)) && selected=$((selected - 1)) ;;
+    "DOWN") ((selected < total - 1)) && selected=$((selected + 1)) ;;
+    "ENTER")
+      show_cursor
+      MS_RESULT_VALUES=("${MS_VALUES[selected]}")
+      return 0
+      ;;
+    "QUIT")
+      show_cursor
+      return 1
+      ;;
+    esac
+    drain_pending_input
+  done
+}
+
+draw_config_menu() {
+  local selected="$1"
+  clear_screen
+  show_brand_banner
+  printf '\n'
+  menu_option 1 "Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
+  menu_option 2 "Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  printf '\n%b↑↓/jk | Enter | 1-5 | Q Back%b\n\n' "$GRAY" "$NC"
+}
+
+configure_tasks() {
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local name enabled desc
+  while IFS=$'\t' read -r name enabled desc; do
+    [[ -z "$name" ]] && continue
+    MS_VALUES+=("$name")
+    MS_LABELS+=("$name  ${desc}")
+    if [[ "$enabled" == "true" ]]; then
+      MS_SELECTED+=("true")
+    else
+      MS_SELECTED+=("false")
+    fi
+  done < <(core config tasks)
+
+  if multi_select "Select Update Tasks"; then
+    core config set-tasks "${MS_RESULT_VALUES[@]}" >/dev/null
+  fi
+}
+
+configure_packages() {
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local task
+  for task in brew cask yazi nvim mason npm; do
+    MS_VALUES+=("$task")
+    MS_LABELS+=("$task")
+    MS_SELECTED+=("false")
+  done
+  select_one "Choose Task" || return 0
+  task="${MS_RESULT_VALUES[0]}"
+
+  local -a include=()
+  local item found
+  while IFS= read -r item; do
+    [[ -n "$item" ]] && include+=("$item")
+  done < <(core config include "$task")
+
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    MS_VALUES+=("$item")
+    MS_LABELS+=("$item")
+    if [[ "${#include[@]}" -eq 0 ]]; then
+      MS_SELECTED+=("true")
+    else
+      found=false
+      local selected_item
+      for selected_item in "${include[@]}"; do
+        [[ "$selected_item" == "$item" ]] && found=true
+      done
+      if [[ "$found" == "true" ]]; then
+        MS_SELECTED+=("true")
+      else
+        MS_SELECTED+=("false")
+      fi
+    fi
+  done < <(core config packages "$task")
+
+  if multi_select "Select ${task} Packages"; then
+    if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
+      clear_screen
+      printf '%bNo packages selected.%b\n\n' "$BLUE" "$NC"
+      printf 'Package filters were not changed. Disable the task from %bTasks%b if you want to skip it entirely.\n\n' "$GREEN" "$NC"
+      printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+      read_key >/dev/null
+    elif [[ "${#MS_RESULT_VALUES[@]}" -eq "${#MS_VALUES[@]}" ]]; then
+      core config set-include "$task" >/dev/null
+    else
+      core config set-include "$task" "${MS_RESULT_VALUES[@]}" >/dev/null
+    fi
+  fi
+}
+
+reset_config() {
+  clear_screen
+  printf '%bReset Bloom config to defaults?%b\n\n' "$BLUE" "$NC"
+  printf '%bEnter%b Reset | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
+  local key
+  key="$(read_key)"
+  if [[ "$key" == "ENTER" ]]; then
+    core config reset >/dev/null
+  fi
+}
+
+run_config_selection() {
+  case "$1" in
+  1) configure_tasks ;;
+  2) configure_packages ;;
+  3)
+    clear_screen
+    core config path
+    printf '\n%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    ;;
+  4) reset_config ;;
+  5) return 1 ;;
+  esac
+  return 0
+}
+
+interactive_config_menu() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    core config
+    return 0
+  fi
+
+  local selected=1 key
+  trap 'show_cursor; exit 130' INT TERM
+  hide_cursor
+  while true; do
+    draw_config_menu "$selected"
+    key="$(read_key)"
+    case "$key" in
+    "UP") ((selected > 1)) && selected=$((selected - 1)) ;;
+    "DOWN") ((selected < 5)) && selected=$((selected + 1)) ;;
+    "ENTER")
+      show_cursor
+      run_config_selection "$selected" || return 0
+      hide_cursor
+      ;;
+    "CHAR:"*)
+      show_cursor
+      run_config_selection "${key#CHAR:}" || return 0
+      hide_cursor
+      ;;
+    "QUIT")
+      show_cursor
+      return 0
+      ;;
+    esac
+    drain_pending_input
+  done
+}
+
 case "${1:-}" in
 "")
   interactive_menu
@@ -242,7 +517,14 @@ case "${1:-}" in
 "version" | "--version" | "-v" | "-V")
   core --version
   ;;
-"update" | "list" | "doctor" | "config")
+"config")
+  if [[ $# -eq 1 ]]; then
+    interactive_config_menu
+  else
+    core "$@"
+  fi
+  ;;
+"update" | "list" | "doctor")
   core "$@"
   ;;
 *)

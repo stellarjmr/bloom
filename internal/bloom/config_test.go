@@ -85,3 +85,34 @@ func TestWriteDefaultConfigDoesNotOverwriteWithoutForce(t *testing.T) {
 		t.Fatal("config was not overwritten with force")
 	}
 }
+
+func TestSaveConfigRoundTripsEnabledTasksAndInclude(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg := DefaultConfig()
+	if err := SetEnabledTasks(&cfg, []string{"brew", "npm"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetTaskInclude(&cfg, "npm", []string{"npm", "corepack", "npm"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.TaskOrder, DefaultTaskNames()) {
+		t.Fatalf("TaskOrder = %#v, want %#v", got.TaskOrder, DefaultTaskNames())
+	}
+	if !got.Tasks["brew"].Enabled || !got.Tasks["npm"].Enabled {
+		t.Fatalf("brew/npm should be enabled: %#v", got.Tasks)
+	}
+	if got.Tasks["yazi"].Enabled {
+		t.Fatalf("yazi should be disabled")
+	}
+	if !reflect.DeepEqual(got.Tasks["npm"].Include, []string{"npm", "corepack"}) {
+		t.Fatalf("npm include = %#v", got.Tasks["npm"].Include)
+	}
+}

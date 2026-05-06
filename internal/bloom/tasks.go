@@ -134,20 +134,22 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 	if res, ok := requireCommand(r, "brew", "brew", opts.Config.Tasks["brew"].InstallHint); !ok {
 		return res
 	}
+	if !opts.DryRun {
+		update := r.Run(ctx, "brew", "update")
+		if update.Err != nil {
+			return failed(update)
+		}
+	}
 	outdated := r.Run(ctx, "brew", "outdated", "--quiet", "--formula")
 	if outdated.Err != nil {
 		return failed(outdated)
 	}
-	formulae := filterNames(nonEmptyLines(outdated.Stdout), opts.Config.Tasks["brew"])
+	formulae := filterNames(resolveBrewFormulaNames(ctx, r, nonEmptyLines(outdated.Stdout)), opts.Config.Tasks["brew"])
 	if len(formulae) == 0 {
 		return TaskResult{Status: StatusOK}
 	}
 	if opts.DryRun {
 		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d formulae", len(formulae)), Summary: iconLines(iconBrew, formulae)}
-	}
-	update := r.Run(ctx, "brew", "update")
-	if update.Err != nil {
-		return failed(update)
 	}
 	args := append([]string{"upgrade"}, formulae...)
 	upgrade := r.Run(ctx, "brew", args...)
@@ -160,6 +162,12 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	if res, ok := requireCommand(r, "cask", "brew", opts.Config.Tasks["cask"].InstallHint); !ok {
 		return res
+	}
+	if !opts.DryRun {
+		update := r.Run(ctx, "brew", "update")
+		if update.Err != nil {
+			return failed(update)
+		}
 	}
 	outdated := r.Run(ctx, "brew", "outdated", "--quiet", "--cask", "--greedy")
 	if outdated.Err != nil {
@@ -366,7 +374,7 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return failed(out)
 	}
 	var summary []string
-	for _, line := range nonEmptyLines(out.Stdout) {
+	for _, line := range nonEmptyLines(out.Combined()) {
 		if strings.HasPrefix(line, "MASON_UPDATED:") {
 			summary = append(summary, iconMason+" "+strings.TrimPrefix(line, "MASON_UPDATED:"))
 		}
@@ -462,6 +470,36 @@ func filterNames(values []string, cfg TaskConfig) []string {
 		}
 	}
 	return out
+}
+
+func resolveBrewFormulaNames(ctx context.Context, r Runner, outdated []string) []string {
+	if len(outdated) == 0 {
+		return nil
+	}
+	out := r.Run(ctx, "brew", "list", "--formula", "--full-name")
+	if out.Err != nil {
+		return outdated
+	}
+	fullNamesByShort := map[string]string{}
+	for _, name := range nonEmptyLines(out.Stdout) {
+		fullNamesByShort[brewShortName(name)] = name
+	}
+	resolved := make([]string, 0, len(outdated))
+	for _, name := range outdated {
+		if fullName := fullNamesByShort[brewShortName(name)]; fullName != "" {
+			resolved = append(resolved, fullName)
+		} else {
+			resolved = append(resolved, name)
+		}
+	}
+	return resolved
+}
+
+func brewShortName(name string) string {
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }
 
 func hasPackageFilter(cfg TaskConfig) bool {

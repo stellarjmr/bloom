@@ -63,6 +63,7 @@ Usage:
   bm update [--dry-run] [--only task] [--skip task] [--config path]
   bm list [--config path]
   bm doctor [--config path]
+  bm config
   bm config path
   bm config init [--force]
   bm --version
@@ -72,6 +73,10 @@ Tasks:
 }
 
 func (a *App) runConfig(args []string) int {
+	if len(args) == 0 {
+		a.printConfigHelp()
+		return 0
+	}
 	if len(args) == 1 && args[0] == "path" {
 		fmt.Fprintln(a.Out, DefaultConfigPath())
 		return 0
@@ -91,8 +96,173 @@ func (a *App) runConfig(args []string) int {
 		fmt.Fprintln(a.Out, path)
 		return 0
 	}
-	fmt.Fprintln(a.Err, "usage: bm config path | bm config init [--force]")
+	switch args[0] {
+	case "tasks":
+		return a.runConfigTasks(args[1:])
+	case "packages":
+		return a.runConfigPackages(args[1:])
+	case "include":
+		return a.runConfigInclude(args[1:])
+	case "set-tasks":
+		return a.runConfigSetTasks(args[1:])
+	case "set-include":
+		return a.runConfigSetInclude(args[1:])
+	case "reset":
+		return a.runConfigReset(args[1:])
+	}
+	fmt.Fprintf(a.Err, "unknown config command: %s\n\n", args[0])
+	a.printConfigHelp()
 	return 2
+}
+
+func (a *App) printConfigHelp() {
+	fmt.Fprintln(a.Out, `Usage:
+  bm config path
+  bm config init [--force]
+  bm config tasks [--config path]
+  bm config packages task
+  bm config include [--config path] task
+  bm config set-tasks [--config path] task...
+  bm config set-include [--config path] task package...
+  bm config reset [--config path]`)
+}
+
+func (a *App) runConfigTasks(args []string) int {
+	fs := flag.NewFlagSet("config tasks", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg, err := LoadConfig(resolveConfigPath(*configPath))
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	descriptions, err := defaultTaskDescriptions()
+	if err != nil {
+		fmt.Fprintf(a.Err, "task error: %v\n", err)
+		return 1
+	}
+	for _, name := range DefaultTaskNames() {
+		enabled := cfg.Tasks[name].Enabled && containsString(cfg.TaskOrder, name)
+		fmt.Fprintf(a.Out, "%s\t%s\t%s\n", name, formatBool(enabled), descriptions[name])
+	}
+	return 0
+}
+
+func (a *App) runConfigPackages(args []string) int {
+	fs := flag.NewFlagSet("config packages", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(a.Err, "usage: bm config packages task")
+		return 2
+	}
+	packages, err := ListTaskPackages(context.Background(), a.Runner, fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(a.Err, "package error: %v\n", err)
+		return 1
+	}
+	for _, name := range packages {
+		fmt.Fprintln(a.Out, name)
+	}
+	return 0
+}
+
+func (a *App) runConfigInclude(args []string) int {
+	fs := flag.NewFlagSet("config include", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(a.Err, "usage: bm config include task")
+		return 2
+	}
+	cfg, err := LoadConfig(resolveConfigPath(*configPath))
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	for _, name := range cfg.Tasks[fs.Arg(0)].Include {
+		fmt.Fprintln(a.Out, name)
+	}
+	return 0
+}
+
+func (a *App) runConfigSetTasks(args []string) int {
+	fs := flag.NewFlagSet("config set-tasks", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	path := resolveConfigPath(*configPath)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SetEnabledTasks(&cfg, fs.Args()); err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		fmt.Fprintf(a.Err, "config write failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(a.Out, path)
+	return 0
+}
+
+func (a *App) runConfigSetInclude(args []string) int {
+	fs := flag.NewFlagSet("config set-include", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(a.Err, "usage: bm config set-include task package...")
+		return 2
+	}
+	path := resolveConfigPath(*configPath)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SetTaskInclude(&cfg, fs.Arg(0), fs.Args()[1:]); err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		fmt.Fprintf(a.Err, "config write failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(a.Out, path)
+	return 0
+}
+
+func (a *App) runConfigReset(args []string) int {
+	fs := flag.NewFlagSet("config reset", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	path := resolveConfigPath(*configPath)
+	if err := SaveConfig(path, DefaultConfig()); err != nil {
+		fmt.Fprintf(a.Err, "config write failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(a.Out, path)
+	return 0
 }
 
 func (a *App) runList(args []string) int {
@@ -271,6 +441,18 @@ func filterRunnableTasks(tasks []Task, runner Runner) []Task {
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+func defaultTaskDescriptions() (map[string]string, error) {
+	tasks, err := BuildTasks(DefaultConfig())
+	if err != nil {
+		return nil, err
+	}
+	descriptions := map[string]string{}
+	for _, task := range tasks {
+		descriptions[task.Name] = task.Description
+	}
+	return descriptions, nil
 }
 
 func filterTasks(tasks []Task, only, skip []string) ([]Task, error) {
