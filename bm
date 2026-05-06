@@ -120,11 +120,11 @@ drain_pending_input() {
 
 show_brand_banner() {
   cat <<EOF
-${GREEN} ____  __  __ ${NC}
-${GREEN}| __ )|  \/  |${NC}
-${GREEN}|  _ \| |\/| |${NC}
-${GREEN}| |_) | |  | |${NC}  ${BLUE}https://github.com/stellarjmr/bloom${NC}
-${GREEN}|____/|_|  |_|${NC}  ${GREEN}Update developer tools fast.${NC}
+${GREEN} ____  _                       ${NC}
+${GREEN}| __ )| | ___   ___  _ __ ___  ${NC}
+${GREEN}|  _ \| |/ _ \ / _ \| '_ \` _ \ ${NC}
+${GREEN}| |_) | | (_) | (_) | | | | | |${NC}  ${BLUE}https://github.com/stellarjmr/bloom${NC}
+${GREEN}|____/|_|\___/ \___/|_| |_| |_|${NC}  ${GREEN}Update developer tools fast.${NC}
 EOF
 }
 

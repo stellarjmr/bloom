@@ -5,36 +5,37 @@ progress_width = 24
 color = true
 
 [tasks]
-order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm", "cleanup"]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
 
 [tasks.brew]
 enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []
 
 [tasks.cask]
 enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []
 
 [tasks.amp]
 enabled = true
-install_hint = "brew install amp"
 
 [tasks.yazi]
 enabled = true
-install_hint = "brew install yazi"
+include = []
+exclude = []
 
 [tasks.nvim]
 enabled = true
-install_hint = "brew install neovim"
+include = []
+exclude = []
 
 [tasks.mason]
 enabled = true
-install_hint = "brew install neovim"
+include = []
+exclude = []
 
 [tasks.npm]
 enabled = true
-install_hint = "brew install node"
-
-[tasks.cleanup]
-enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []

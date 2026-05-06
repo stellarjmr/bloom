@@ -19,6 +19,17 @@ const (
 	StatusDryRun  TaskStatus = "dry-run"
 )
 
+const (
+	iconBrew    = "󰇥"
+	iconCask    = "󰀻"
+	iconAmp     = "AI"
+	iconYazi    = "🦆"
+	iconNvim    = ""
+	iconMason   = "󰏗"
+	iconNPM     = ""
+	iconCleanup = "󰃢"
+)
+
 type UpdateOptions struct {
 	DryRun bool
 	Config Config
@@ -113,9 +124,7 @@ func BuildTasks(cfg Config) ([]Task, error) {
 func requireCommand(r Runner, taskName, command, hint string) (TaskResult, bool) {
 	if _, err := r.LookPath(command); err != nil {
 		return TaskResult{
-			Status:      StatusSkipped,
-			Message:     "missing " + command,
-			InstallHint: hint,
+			Status: StatusSkipped,
 		}, false
 	}
 	return TaskResult{}, true
@@ -129,12 +138,12 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 	if outdated.Err != nil {
 		return failed(outdated)
 	}
-	formulae := nonEmptyLines(outdated.Stdout)
+	formulae := filterNames(nonEmptyLines(outdated.Stdout), opts.Config.Tasks["brew"])
 	if len(formulae) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current"}
+		return TaskResult{Status: StatusOK}
 	}
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d formulae", len(formulae)), Summary: prefixLines("would update brew formula ", formulae)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d formulae", len(formulae)), Summary: iconLines(iconBrew, formulae)}
 	}
 	update := r.Run(ctx, "brew", "update")
 	if update.Err != nil {
@@ -145,7 +154,7 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d updated", len(formulae)), Summary: prefixLines("updated brew formula ", formulae)}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(formulae)), Summary: iconLines(iconBrew, formulae)}
 }
 
 func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -156,19 +165,19 @@ func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult 
 	if outdated.Err != nil {
 		return failed(outdated)
 	}
-	casks := nonEmptyLines(outdated.Stdout)
+	casks := filterNames(nonEmptyLines(outdated.Stdout), opts.Config.Tasks["cask"])
 	if len(casks) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current"}
+		return TaskResult{Status: StatusOK}
 	}
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d casks", len(casks)), Summary: prefixLines("would update brew cask ", casks)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d casks", len(casks)), Summary: iconLines(iconCask, casks)}
 	}
 	args := append([]string{"upgrade", "--cask", "--greedy"}, casks...)
 	upgrade := r.Run(ctx, "brew", args...)
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d updated", len(casks)), Summary: prefixLines("updated brew cask ", casks)}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(casks)), Summary: iconLines(iconCask, casks)}
 }
 
 func runAmp(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -185,9 +194,9 @@ func runAmp(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	}
 	after := strings.TrimSpace(r.Run(ctx, "amp", "--version").Stdout)
 	if before != "" && after != "" && before != after {
-		return TaskResult{Status: StatusOK, Message: "updated", Summary: []string{"updated amp"}}
+		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{iconAmp + " amp"}}
 	}
-	return TaskResult{Status: StatusOK, Message: "current"}
+	return TaskResult{Status: StatusOK}
 }
 
 func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -196,18 +205,24 @@ func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	}
 	beforeOut := r.Run(ctx, "ya", "pkg", "list")
 	before := parseYaziPlugins(beforeOut.Stdout)
+	selected := filterNames(mapNames(before), opts.Config.Tasks["yazi"])
+	before = pickVersionMap(before, selected)
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d plugins", len(before))}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d plugins", len(selected)), Summary: iconLines(iconYazi, selected)}
 	}
-	upgrade := r.Run(ctx, "ya", "pkg", "upgrade")
+	if len(selected) == 0 {
+		return TaskResult{Status: StatusOK}
+	}
+	args := append([]string{"pkg", "upgrade"}, selected...)
+	upgrade := r.Run(ctx, "ya", args...)
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
 	afterOut := r.Run(ctx, "ya", "pkg", "list")
-	after := parseYaziPlugins(afterOut.Stdout)
-	summary := diffVersionMap("updated yazi plugin ", "installed yazi plugin ", before, after)
+	after := pickVersionMap(parseYaziPlugins(afterOut.Stdout), selected)
+	summary := diffVersionMap(iconYazi, before, after)
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current"}
+		return TaskResult{Status: StatusOK}
 	}
 	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary}
 }
@@ -221,20 +236,29 @@ func runNPM(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return failed(beforeOut)
 	}
 	before := parseNPMGlobals(beforeOut.Stdout)
+	selected := filterNames(mapNames(before), opts.Config.Tasks["npm"])
+	before = pickVersionMap(before, selected)
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d packages", len(before))}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d packages", len(selected)), Summary: iconLines(iconNPM, selected)}
 	}
-	update := r.Run(ctx, "npm", "update", "-g")
+	if len(selected) == 0 {
+		return TaskResult{Status: StatusOK}
+	}
+	args := []string{"update", "-g"}
+	if hasPackageFilter(opts.Config.Tasks["npm"]) {
+		args = append(args, selected...)
+	}
+	update := r.Run(ctx, "npm", args...)
 	if update.Err != nil {
 		return failed(update)
 	}
 	afterOut := r.Run(ctx, "npm", "list", "-g", "--depth=0", "--json")
-	after := parseNPMGlobals(afterOut.Stdout)
-	summary := diffVersionMap("updated npm package ", "", before, after)
+	after := pickVersionMap(parseNPMGlobals(afterOut.Stdout), selected)
+	summary := diffVersionMap(iconNPM, before, after)
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current"}
+		return TaskResult{Status: StatusOK}
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d updated", len(summary)), Summary: summary}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary}
 }
 
 func runBrewCleanup(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -248,7 +272,7 @@ func runBrewCleanup(ctx context.Context, r Runner, opts UpdateOptions) TaskResul
 	if cleanup.Err != nil {
 		return failed(cleanup)
 	}
-	return TaskResult{Status: StatusOK, Message: "done"}
+	return TaskResult{Status: StatusOK, Message: "done", Summary: []string{iconCleanup + " cleanup"}}
 }
 
 func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -261,9 +285,10 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	hasLazy := fileExists(lazyLock)
 	hasPack := fileExists(packLock)
 	if !hasLazy && !hasPack {
-		return TaskResult{Status: StatusSkipped, Message: "no lockfiles"}
+		return TaskResult{Status: StatusSkipped}
 	}
 
+	taskCfg := opts.Config.Tasks["nvim"]
 	beforeLazy := map[string]string{}
 	beforePack := map[string]string{}
 	if hasLazy {
@@ -272,29 +297,34 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	if hasPack {
 		beforePack = parsePackLockFile(packLock)
 	}
+	lazyNames := filterNames(mapNames(beforeLazy), taskCfg)
+	packNames := filterNames(mapNames(beforePack), taskCfg)
 
 	if opts.DryRun {
 		parts := make([]string, 0, 2)
-		if hasLazy {
+		if hasLazy && shouldRunPackageSet(lazyNames, taskCfg) {
 			parts = append(parts, "lazy.nvim")
 		}
-		if hasPack {
+		if hasPack && shouldRunPackageSet(packNames, taskCfg) {
 			parts = append(parts, "vim.pack")
+		}
+		if len(parts) == 0 {
+			return TaskResult{Status: StatusOK}
 		}
 		return TaskResult{Status: StatusDryRun, Message: strings.Join(parts, ", ")}
 	}
 
 	var combinedOutput strings.Builder
-	if hasLazy {
-		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+Lazy! sync", "+qa")
+	if hasLazy && shouldRunPackageSet(lazyNames, taskCfg) {
+		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+lazyLua(lazyNames, hasPackageFilter(taskCfg)), "+qa")
 		combinedOutput.WriteString(out.Combined())
 		if out.Err != nil {
 			return TaskResult{Err: out.Err, Output: out.Combined()}
 		}
 	}
-	if hasPack {
+	if hasPack && shouldRunPackageSet(packNames, taskCfg) {
 		// vim.pack.update({names}, {force=true}) applies updates without the interactive confirmation buffer.
-		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua if vim.pack then vim.pack.update(nil, { force = true }) else error('vim.pack is not available') end", "+qa")
+		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+vimPackLua(packNames, hasPackageFilter(taskCfg)), "+qa")
 		combinedOutput.WriteString(out.Combined())
 		if out.Err != nil {
 			return TaskResult{Err: out.Err, Output: out.Combined()}
@@ -309,11 +339,17 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	if hasPack {
 		afterPack = parsePackLockFile(packLock)
 	}
+	if hasPackageFilter(taskCfg) {
+		beforeLazy = pickVersionMap(beforeLazy, lazyNames)
+		afterLazy = pickVersionMap(afterLazy, lazyNames)
+		beforePack = pickVersionMap(beforePack, packNames)
+		afterPack = pickVersionMap(afterPack, packNames)
+	}
 
-	summary := diffVersionMap("updated nvim plugin ", "installed nvim plugin ", beforeLazy, afterLazy)
-	summary = append(summary, diffVersionMap("updated vim.pack plugin ", "installed vim.pack plugin ", beforePack, afterPack)...)
+	summary := diffVersionMap(iconNvim, beforeLazy, afterLazy)
+	summary = append(summary, diffVersionMap(iconNvim, beforePack, afterPack)...)
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current", Output: combinedOutput.String()}
+		return TaskResult{Status: StatusOK, Output: combinedOutput.String()}
 	}
 	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary, Output: combinedOutput.String()}
 }
@@ -325,20 +361,20 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	if opts.DryRun {
 		return TaskResult{Status: StatusDryRun, Message: "mason registry"}
 	}
-	out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonLua(), "+qa")
+	out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonLua(opts.Config.Tasks["mason"].Include, opts.Config.Tasks["mason"].Exclude), "+qa")
 	if out.Err != nil {
 		return failed(out)
 	}
 	var summary []string
 	for _, line := range nonEmptyLines(out.Stdout) {
 		if strings.HasPrefix(line, "MASON_UPDATED:") {
-			summary = append(summary, "updated mason package "+strings.TrimPrefix(line, "MASON_UPDATED:"))
+			summary = append(summary, iconMason+" "+strings.TrimPrefix(line, "MASON_UPDATED:"))
 		}
 	}
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK, Message: "current"}
+		return TaskResult{Status: StatusOK}
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d updated", len(summary)), Summary: summary}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary}
 }
 
 func failed(out CommandOutput) TaskResult {
@@ -356,15 +392,15 @@ func nonEmptyLines(text string) []string {
 	return lines
 }
 
-func prefixLines(prefix string, values []string) []string {
+func iconLines(icon string, values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		out = append(out, prefix+value)
+		out = append(out, icon+" "+value)
 	}
 	return out
 }
 
-func diffVersionMap(updatePrefix, installPrefix string, before, after map[string]string) []string {
+func diffVersionMap(icon string, before, after map[string]string) []string {
 	var names []string
 	for name := range before {
 		names = append(names, name)
@@ -376,11 +412,8 @@ func diffVersionMap(updatePrefix, installPrefix string, before, after map[string
 		oldVersion := before[name]
 		newVersion := after[name]
 		if newVersion != "" && newVersion != oldVersion {
-			summary = append(summary, updatePrefix+name)
+			summary = append(summary, icon+" "+name)
 		}
-	}
-	if installPrefix == "" {
-		return summary
 	}
 
 	names = names[:0]
@@ -391,9 +424,71 @@ func diffVersionMap(updatePrefix, installPrefix string, before, after map[string
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		summary = append(summary, installPrefix+name)
+		summary = append(summary, icon+" "+name)
 	}
 	return summary
+}
+
+func filterNames(values []string, cfg TaskConfig) []string {
+	available := map[string]bool{}
+	for _, value := range values {
+		available[value] = true
+	}
+
+	var filtered []string
+	if len(cfg.Include) > 0 {
+		seen := map[string]bool{}
+		for _, value := range cfg.Include {
+			if available[value] && !seen[value] {
+				filtered = append(filtered, value)
+				seen[value] = true
+			}
+		}
+	} else {
+		filtered = append(filtered, values...)
+	}
+
+	if len(cfg.Exclude) == 0 {
+		return filtered
+	}
+	excluded := map[string]bool{}
+	for _, value := range cfg.Exclude {
+		excluded[value] = true
+	}
+	out := filtered[:0]
+	for _, value := range filtered {
+		if !excluded[value] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func hasPackageFilter(cfg TaskConfig) bool {
+	return len(cfg.Include) > 0 || len(cfg.Exclude) > 0
+}
+
+func shouldRunPackageSet(names []string, cfg TaskConfig) bool {
+	return !hasPackageFilter(cfg) || len(names) > 0
+}
+
+func mapNames(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func pickVersionMap(values map[string]string, names []string) map[string]string {
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		if version, ok := values[name]; ok {
+			out[name] = version
+		}
+	}
+	return out
 }
 
 func fileExists(path string) bool {
@@ -491,12 +586,78 @@ func parsePackLockFile(path string) map[string]string {
 	return result
 }
 
-func masonLua() string {
-	return `
+func lazyLua(names []string, filtered bool) string {
+	plugins := "nil"
+	if filtered {
+		plugins = luaStringArray(names)
+	}
+	return strings.ReplaceAll(`
+local ok_lazy, lazy = pcall(require, 'lazy')
+if not ok_lazy then
+  vim.api.nvim_out_write('LAZY_MISSING\n')
+  return
+end
+
+local opts = { wait = true, show = false }
+if __BLOOM_PLUGINS__ ~= nil then
+  opts.plugins = __BLOOM_PLUGINS__
+end
+lazy.sync(opts)
+`, "__BLOOM_PLUGINS__", plugins)
+}
+
+func vimPackLua(names []string, filtered bool) string {
+	plugins := "nil"
+	if filtered {
+		plugins = luaStringArray(names)
+	}
+	return strings.ReplaceAll(`
+if not vim.pack then
+  vim.api.nvim_out_write('VIM_PACK_MISSING\n')
+  return
+end
+
+vim.pack.update(__BLOOM_PLUGINS__, { force = true })
+`, "__BLOOM_PLUGINS__", plugins)
+}
+
+func luaStringArray(values []string) string {
+	if len(values) == 0 {
+		return "{}"
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ReplaceAll(value, `\`, `\\`)
+		value = strings.ReplaceAll(value, `"`, `\"`)
+		quoted = append(quoted, `"`+value+`"`)
+	}
+	return "{ " + strings.Join(quoted, ", ") + " }"
+}
+
+func masonLua(include, exclude []string) string {
+	lua := `
 local pip_args = {}
 local proxy = os.getenv('PIP_PROXY')
 if proxy then
   pip_args = { '--proxy', proxy }
+end
+
+local include = __BLOOM_INCLUDE__
+local exclude = __BLOOM_EXCLUDE__
+local include_set = {}
+local exclude_set = {}
+for _, name in ipairs(include) do
+  include_set[name] = true
+end
+for _, name in ipairs(exclude) do
+  exclude_set[name] = true
+end
+
+local function wants_package(name)
+  if next(include_set) ~= nil and not include_set[name] then
+    return false
+  end
+  return not exclude_set[name]
 end
 
 local ok_lazy, lazy = pcall(require, 'lazy')
@@ -506,7 +667,8 @@ end
 
 local ok_mason, mason = pcall(require, 'mason')
 if not ok_mason then
-  error(('mason.nvim is not available: %s'):format(mason))
+  vim.api.nvim_out_write('MASON_MISSING\n')
+  return
 end
 
 mason.setup({
@@ -541,7 +703,7 @@ a.run_blocking(function()
   for _, pkg in ipairs(registry.get_installed_packages()) do
     local current_version = pkg:get_installed_version()
     local latest_version = pkg:get_latest_version()
-    if current_version ~= latest_version then
+    if current_version ~= latest_version and wants_package(pkg.name) then
       table.insert(outdated, pkg)
     end
   end
@@ -562,4 +724,7 @@ a.run_blocking(function()
   end
 end)
 `
+	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
+	lua = strings.ReplaceAll(lua, "__BLOOM_EXCLUDE__", luaStringArray(exclude))
+	return lua
 }

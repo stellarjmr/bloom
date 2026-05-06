@@ -19,23 +19,25 @@ type Config struct {
 
 type TaskConfig struct {
 	Enabled     bool
+	Include     []string
+	Exclude     []string
 	InstallHint string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		TaskOrder:     []string{"brew", "cask", "amp", "yazi", "nvim", "mason", "npm", "cleanup"},
+		TaskOrder:     []string{"brew", "cask", "amp", "yazi", "nvim", "mason", "npm"},
 		ProgressWidth: 24,
 		Color:         true,
 		Tasks: map[string]TaskConfig{
-			"brew":    {Enabled: true, InstallHint: "install Homebrew from https://brew.sh"},
-			"cask":    {Enabled: true, InstallHint: "install Homebrew from https://brew.sh"},
-			"amp":     {Enabled: true, InstallHint: "brew install amp"},
-			"yazi":    {Enabled: true, InstallHint: "brew install yazi"},
-			"nvim":    {Enabled: true, InstallHint: "brew install neovim"},
-			"mason":   {Enabled: true, InstallHint: "brew install neovim"},
-			"npm":     {Enabled: true, InstallHint: "brew install node"},
-			"cleanup": {Enabled: true, InstallHint: "install Homebrew from https://brew.sh"},
+			"brew":    {Enabled: true},
+			"cask":    {Enabled: true},
+			"amp":     {Enabled: true},
+			"yazi":    {Enabled: true},
+			"nvim":    {Enabled: true},
+			"mason":   {Enabled: true},
+			"npm":     {Enabled: true},
+			"cleanup": {Enabled: true},
 		},
 	}
 }
@@ -134,39 +136,40 @@ progress_width = 24
 color = true
 
 [tasks]
-order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm", "cleanup"]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
 
 [tasks.brew]
 enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []
 
 [tasks.cask]
 enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []
 
 [tasks.amp]
 enabled = true
-install_hint = "brew install amp"
 
 [tasks.yazi]
 enabled = true
-install_hint = "brew install yazi"
+include = []
+exclude = []
 
 [tasks.nvim]
 enabled = true
-install_hint = "brew install neovim"
+include = []
+exclude = []
 
 [tasks.mason]
 enabled = true
-install_hint = "brew install neovim"
+include = []
+exclude = []
 
 [tasks.npm]
 enabled = true
-install_hint = "brew install node"
-
-[tasks.cleanup]
-enabled = true
-install_hint = "install Homebrew from https://brew.sh"
+include = []
+exclude = []
 `
 }
 
@@ -201,6 +204,18 @@ func parseTaskSetting(task *TaskConfig, key, value string) error {
 			return err
 		}
 		task.Enabled = b
+	case "include":
+		items, err := parseStringArray(value)
+		if err != nil {
+			return err
+		}
+		task.Include = items
+	case "exclude":
+		items, err := parseStringArray(value)
+		if err != nil {
+			return err
+		}
+		task.Exclude = items
 	case "install_hint":
 		s, err := parseString(value)
 		if err != nil {

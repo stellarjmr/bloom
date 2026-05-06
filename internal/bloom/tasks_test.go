@@ -41,8 +41,18 @@ func TestParseNPMGlobals(t *testing.T) {
 func TestDiffVersionMap(t *testing.T) {
 	before := map[string]string{"a": "1", "b": "1"}
 	after := map[string]string{"a": "2", "b": "1", "c": "1"}
-	got := diffVersionMap("updated ", "installed ", before, after)
-	want := []string{"updated a", "installed c"}
+	got := diffVersionMap("*", before, after)
+	want := []string{"* a", "* c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestFilterNamesIncludeExclude(t *testing.T) {
+	values := []string{"a", "b", "c"}
+	cfg := TaskConfig{Include: []string{"c", "a", "missing"}, Exclude: []string{"a"}}
+	got := filterNames(values, cfg)
+	want := []string{"c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
 	}

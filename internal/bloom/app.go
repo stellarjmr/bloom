@@ -68,7 +68,7 @@ Usage:
   bm --version
 
 Tasks:
-  brew, cask, amp, yazi, nvim, mason, npm, cleanup`)
+  brew, cask, amp, yazi, nvim, mason, npm`)
 }
 
 func (a *App) runConfig(args []string) int {
@@ -158,7 +158,7 @@ func (a *App) runDoctor(args []string) int {
 		}
 		path, err := a.Runner.LookPath(task.RequiredCommand)
 		if err != nil {
-			fmt.Fprintf(a.Out, "  %-8s missing (%s)\n", task.Name, task.InstallHint)
+			fmt.Fprintf(a.Out, "  %-8s missing\n", task.Name)
 			continue
 		}
 		fmt.Fprintf(a.Out, "  %-8s %s\n", task.Name, path)
@@ -199,8 +199,9 @@ func (a *App) runUpdate(args []string) int {
 		fmt.Fprintf(a.Err, "task error: %v\n", err)
 		return 1
 	}
+	tasks = filterRunnableTasks(tasks, a.Runner)
 	if len(tasks) == 0 {
-		fmt.Fprintln(a.Out, "no tasks selected")
+		fmt.Fprintln(a.Out, "no available tasks selected")
 		return 0
 	}
 
@@ -248,19 +249,28 @@ func (a *App) runUpdate(args []string) int {
 			fmt.Fprintln(a.Out, line)
 			summaries++
 		}
-		if res.InstallHint != "" && res.Status == StatusSkipped {
-			if summaries == 0 {
-				fmt.Fprintln(a.Out)
-			}
-			fmt.Fprintf(a.Out, "%s: %s\n", res.Name, res.InstallHint)
-			summaries++
-		}
 	}
 
 	if failures > 0 {
 		return 1
 	}
 	return 0
+}
+
+func filterRunnableTasks(tasks []Task, runner Runner) []Task {
+	filtered := make([]Task, 0, len(tasks))
+	for _, task := range tasks {
+		if !task.Enabled {
+			continue
+		}
+		if task.RequiredCommand != "" {
+			if _, err := runner.LookPath(task.RequiredCommand); err != nil {
+				continue
+			}
+		}
+		filtered = append(filtered, task)
+	}
+	return filtered
 }
 
 func filterTasks(tasks []Task, only, skip []string) ([]Task, error) {

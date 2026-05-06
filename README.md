@@ -16,6 +16,7 @@ brew install stellarjmr/tool/bloom
 ```
 
 The Homebrew formula is published from the `stellarjmr/tool` tap.
+Homebrew installs prebuilt release binaries, so Go is only needed when building from source.
 
 ## Commands
 
@@ -26,7 +27,7 @@ bm update --dry-run          # inspect selected tasks without updating
 bm update --only nvim        # run one task
 bm update --skip npm         # skip a task
 bm list                      # list configured tasks
-bm doctor                    # show missing tools and install hints
+bm doctor                    # show available and missing tools
 bm config path               # print config path
 bm config init               # create ~/.config/bloom/config.toml
 ```
@@ -42,9 +43,8 @@ The built-in task set mirrors the original `update-all.sh` workflow:
 - `nvim`: Neovim plugin updates for both lazy.nvim/LazyVim and `vim.pack`
 - `mason`: Mason package updates
 - `npm`: global npm package updates
-- `cleanup`: `brew cleanup`
 
-Missing tools are not installed automatically. `bm doctor` prints the preferred installation command, usually via Homebrew.
+Missing tools are skipped during `bm update` and are not counted in the progress total.
 
 ## Config
 
@@ -60,7 +60,7 @@ Create it with:
 bm config init
 ```
 
-The config supports task order, enable/disable switches, install hints, progress width, and color output. See `config.example.toml`.
+The config supports task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update everything that exists. See `config.example.toml`.
 
 ## Neovim
 

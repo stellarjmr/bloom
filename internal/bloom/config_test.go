@@ -20,7 +20,8 @@ order = ["npm", "nvim"]
 
 [tasks.npm]
 enabled = false
-install_hint = "brew install node"
+include = ["npm", "@scope/tool"]
+exclude = ["legacy"]
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -41,6 +42,12 @@ install_hint = "brew install node"
 	}
 	if cfg.Tasks["npm"].Enabled {
 		t.Fatalf("npm enabled = true, want false")
+	}
+	if !reflect.DeepEqual(cfg.Tasks["npm"].Include, []string{"npm", "@scope/tool"}) {
+		t.Fatalf("npm include = %#v", cfg.Tasks["npm"].Include)
+	}
+	if !reflect.DeepEqual(cfg.Tasks["npm"].Exclude, []string{"legacy"}) {
+		t.Fatalf("npm exclude = %#v", cfg.Tasks["npm"].Exclude)
 	}
 }
 
