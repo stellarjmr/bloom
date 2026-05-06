@@ -2,10 +2,10 @@
 
 `bloom` is a config-driven terminal updater for developer tools on macOS.
 
-It is designed to replace one-off update scripts with a single command:
+It is designed to replace one-off update scripts with a fast shortcut:
 
 ```bash
-bloom update
+bm
 ```
 
 ## Install
@@ -22,6 +22,9 @@ The Homebrew formula is published from the `stellarjmr/tool` tap.
 ## Commands
 
 ```bash
+bm                           # same as bloom update
+bm --dry-run                 # same as bloom update --dry-run
+bloom                        # open the interactive menu
 bloom update                 # run enabled update tasks
 bloom update --dry-run       # inspect selected tasks without updating
 bloom update --only nvim     # run one task

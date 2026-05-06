@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fast Bloom updater shortcut. Equivalent to `bloom update`.
+
+set -euo pipefail
+
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  local dir target
+  while [[ -L "$source" ]]; do
+    dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+    target="$(readlink "$source")"
+    [[ "$target" != /* ]] && source="$dir/$target" || source="$target"
+  done
+  cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+exec "$SCRIPT_DIR/bloom" update "$@"
