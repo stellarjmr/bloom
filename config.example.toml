@@ -1,0 +1,40 @@
+# bloom config
+
+[settings]
+progress_width = 24
+color = true
+
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm", "cleanup"]
+
+[tasks.brew]
+enabled = true
+install_hint = "install Homebrew from https://brew.sh"
+
+[tasks.cask]
+enabled = true
+install_hint = "install Homebrew from https://brew.sh"
+
+[tasks.amp]
+enabled = true
+install_hint = "brew install amp"
+
+[tasks.yazi]
+enabled = true
+install_hint = "brew install yazi"
+
+[tasks.nvim]
+enabled = true
+install_hint = "brew install neovim"
+
+[tasks.mason]
+enabled = true
+install_hint = "brew install neovim"
+
+[tasks.npm]
+enabled = true
+install_hint = "brew install node"
+
+[tasks.cleanup]
+enabled = true
+install_hint = "install Homebrew from https://brew.sh"
