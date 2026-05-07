@@ -47,6 +47,8 @@ func (a *App) Run(args []string) int {
 		return a.runList(args[1:])
 	case "doctor":
 		return a.runDoctor(args[1:])
+	case "check":
+		return a.runCheck(args[1:])
 	case "update":
 		return a.runUpdate(args[1:])
 	default:
@@ -60,7 +62,8 @@ func (a *App) printHelp() {
 	fmt.Fprintln(a.Out, `bm updates developer tools from one terminal command.
 
 Usage:
-  bm update [--dry-run] [--only task] [--skip task] [--config path]
+  bm check [--format tree|tsv] [--config path]
+  bm update [--dry-run] [--only task] [--skip task] [--package task:package] [--config path]
   bm list [--config path]
   bm doctor [--config path]
   bm config
@@ -336,6 +339,45 @@ func (a *App) runDoctor(args []string) int {
 	return 0
 }
 
+func (a *App) runCheck(args []string) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	format := fs.String("format", "tree", "output format: tree or tsv")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg, err := LoadConfig(resolveConfigPath(*configPath))
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+
+	items, err := CheckUpdates(context.Background(), newCachedRunner(a.Runner), cfg)
+	if err != nil {
+		fmt.Fprintf(a.Err, "check error: %v\n", err)
+		return 1
+	}
+
+	switch *format {
+	case "tsv":
+		for _, item := range items {
+			fmt.Fprintf(a.Out, "%s\t%s\n", item.Task, item.Name)
+		}
+	case "tree":
+		if len(items) == 0 {
+			fmt.Fprintln(a.Out, "no updates available")
+			return 0
+		}
+		printSummaryGroups(a.Out, summaryGroupsFromItems(items))
+	default:
+		fmt.Fprintf(a.Err, "unknown check format: %s\n", *format)
+		return 2
+	}
+	return 0
+}
+
 func (a *App) runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
@@ -344,8 +386,10 @@ func (a *App) runUpdate(args []string) int {
 	noColor := fs.Bool("no-color", false, "disable color")
 	var only multiFlag
 	var skip multiFlag
+	var packages multiFlag
 	fs.Var(&only, "only", "run only this task; repeatable")
 	fs.Var(&skip, "skip", "skip this task; repeatable")
+	fs.Var(&packages, "package", "update only task:package; repeatable")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -358,13 +402,22 @@ func (a *App) runUpdate(args []string) int {
 	if *noColor {
 		cfg.Color = false
 	}
+	onlyValues := only.Values()
+	packageOnly, err := applyPackageFilters(&cfg, packages.Values())
+	if err != nil {
+		fmt.Fprintf(a.Err, "package filter error: %v\n", err)
+		return 2
+	}
+	if len(packageOnly) > 0 && len(onlyValues) == 0 {
+		onlyValues = packageOnly
+	}
 
 	tasks, err := BuildTasks(cfg)
 	if err != nil {
 		fmt.Fprintf(a.Err, "task error: %v\n", err)
 		return 1
 	}
-	tasks, err = filterTasks(tasks, only.Values(), skip.Values())
+	tasks, err = filterTasks(tasks, onlyValues, skip.Values())
 	if err != nil {
 		fmt.Fprintf(a.Err, "task error: %v\n", err)
 		return 1
@@ -419,11 +472,7 @@ func (a *App) runUpdate(args []string) int {
 	}
 	progress.Finish()
 
-	for _, res := range results {
-		for _, line := range res.Summary {
-			fmt.Fprintln(a.Out, line)
-		}
-	}
+	printSummaryGroups(a.Out, summaryGroupsFromResults(results))
 
 	if failures > 0 {
 		return 1
@@ -445,6 +494,53 @@ func filterRunnableTasks(tasks []Task, runner Runner) []Task {
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+type summaryGroup struct {
+	Name  string
+	Items []string
+}
+
+func summaryGroupsFromResults(results []TaskResult) []summaryGroup {
+	groups := make([]summaryGroup, 0, len(results))
+	for _, res := range results {
+		if len(res.Summary) == 0 {
+			continue
+		}
+		groups = append(groups, summaryGroup{Name: res.Name, Items: res.Summary})
+	}
+	return groups
+}
+
+func summaryGroupsFromItems(items []UpdateItem) []summaryGroup {
+	groups := []summaryGroup{}
+	groupIndex := map[string]int{}
+	for _, item := range items {
+		idx, ok := groupIndex[item.Task]
+		if !ok {
+			idx = len(groups)
+			groupIndex[item.Task] = idx
+			groups = append(groups, summaryGroup{Name: item.Task})
+		}
+		groups[idx].Items = append(groups[idx].Items, item.Name)
+	}
+	return groups
+}
+
+func printSummaryGroups(out io.Writer, groups []summaryGroup) {
+	for _, group := range groups {
+		if len(group.Items) == 0 {
+			continue
+		}
+		fmt.Fprintf(out, "✓ %s\n", group.Name)
+		for i, item := range group.Items {
+			branch := "├──"
+			if i == len(group.Items)-1 {
+				branch = "└──"
+			}
+			fmt.Fprintf(out, "   %s %s\n", branch, item)
+		}
+	}
 }
 
 func defaultTaskDescriptions() (map[string]string, error) {
@@ -492,6 +588,45 @@ func filterTasks(tasks []Task, only, skip []string) ([]Task, error) {
 		filtered = append(filtered, task)
 	}
 	return filtered, nil
+}
+
+func applyPackageFilters(cfg *Config, filters []string) ([]string, error) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+	if cfg.Tasks == nil {
+		cfg.Tasks = map[string]TaskConfig{}
+	}
+	byTask := map[string][]string{}
+	for _, filter := range filters {
+		task, name, ok := strings.Cut(filter, ":")
+		task = strings.TrimSpace(task)
+		name = strings.TrimSpace(name)
+		if !ok || task == "" || name == "" {
+			return nil, fmt.Errorf("expected task:package, got %q", filter)
+		}
+		if !isDefaultTask(task) {
+			return nil, fmt.Errorf("unknown task %q", task)
+		}
+		if !taskSupportsPackages(task) {
+			return nil, fmt.Errorf("task %q does not support package filters", task)
+		}
+		byTask[task] = append(byTask[task], name)
+	}
+
+	only := make([]string, 0, len(byTask))
+	for _, task := range cfg.TaskOrder {
+		names := byTask[task]
+		if len(names) == 0 {
+			continue
+		}
+		taskCfg := cfg.Tasks[task]
+		taskCfg.Include = uniqueStrings(names)
+		taskCfg.Exclude = nil
+		cfg.Tasks[task] = taskCfg
+		only = append(only, task)
+	}
+	return only, nil
 }
 
 func resolveConfigPath(path string) string {

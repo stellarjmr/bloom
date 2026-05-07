@@ -41,6 +41,20 @@ func TestParseNPMGlobals(t *testing.T) {
 	}
 }
 
+func TestParseNPMOutdated(t *testing.T) {
+	got, err := parseNPMOutdated(`{
+  "@scope/tool": { "current": "1.0.0", "wanted": "1.1.0", "latest": "1.1.0" },
+  "npm": { "current": "10.0.0", "wanted": "11.0.0", "latest": "11.0.0" }
+}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"@scope/tool", "npm"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestDiffVersionMap(t *testing.T) {
 	before := map[string]string{"a": "1", "b": "1"}
 	after := map[string]string{"a": "2", "b": "1", "c": "1"}
@@ -212,6 +226,43 @@ func TestRunBrewFormulaeDryRunDoesNotUpdateMetadata(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestCheckUpdatesUsesOfficialCheckCommands(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true, "npm": true},
+		outputs: map[string]CommandOutput{
+			"brew update":                           {},
+			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
+			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
+			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
+			"npm outdated -g --json --depth=0":      {Stdout: `{"npm":{"current":"1.0.0","wanted":"1.1.0","latest":"1.1.0"}}`},
+		},
+	}
+
+	got, err := CheckUpdates(context.Background(), r, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantItems := []UpdateItem{
+		{Task: "brew", Name: "stellarjmr/tool/bloom"},
+		{Task: "cask", Name: "iterm2"},
+		{Task: "npm", Name: "npm"},
+	}
+	if !reflect.DeepEqual(got, wantItems) {
+		t.Fatalf("items = %#v, want %#v", got, wantItems)
+	}
+
+	wantCalls := []string{
+		"brew update",
+		"brew outdated --quiet --formula",
+		"brew list --formula --full-name",
+		"brew outdated --quiet --cask --greedy",
+		"npm outdated -g --json --depth=0",
+	}
+	if !reflect.DeepEqual(r.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, wantCalls)
 	}
 }
 

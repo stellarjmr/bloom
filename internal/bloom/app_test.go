@@ -97,8 +97,71 @@ func TestRunUpdatePrintsDoneAndSummaryWithoutBlankLine(t *testing.T) {
 	}
 
 	got := strings.TrimSpace(stdout.String())
-	want := "[━━━━━━━━] 100% ✓ amp changed\n[━━━━━━━━] 100% ✓ done!\namp"
+	want := "[━━━━━━━━] 100% ✓ amp changed\n[━━━━━━━━] 100% ✓ done!\n✓ amp\n   └── amp"
 	if got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunCheckOutputsTSV(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true, "npm": true},
+		outputs: map[string]CommandOutput{
+			"brew update":                           {},
+			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
+			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
+			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
+			"npm outdated -g --json --depth=0":      {Stdout: `{"npm":{"current":"1.0.0","wanted":"1.1.0","latest":"1.1.0"}}`},
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := &App{Out: &stdout, Err: &stderr, Runner: r}
+
+	code := app.Run([]string{"check", "--format", "tsv"})
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+
+	got := stdout.String()
+	want := "brew\tstellarjmr/tool/bloom\ncask\titerm2\nnpm\tnpm\n"
+	if got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunUpdatePackageFilterRunsSelectedTaskPackage(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TaskOrder = []string{"brew", "npm"}
+	cfg.ProgressWidth = 8
+	cfg.Color = false
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true, "npm": true},
+		outputs: map[string]CommandOutput{
+			"npm list -g --depth=0 --json": {Stdout: `{"dependencies":{"npm":{"version":"1.0.0"},"corepack":{"version":"1.0.0"}}}`},
+			"npm update -g npm":            {},
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := &App{Out: &stdout, Err: &stderr, Runner: r}
+
+	code := app.Run([]string{"update", "--config", path, "--package", "npm:npm"})
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+
+	wantCalls := []string{
+		"npm list -g --depth=0 --json",
+		"npm update -g npm",
+		"npm list -g --depth=0 --json",
+	}
+	if !reflect.DeepEqual(r.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, wantCalls)
 	}
 }
