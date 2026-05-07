@@ -390,9 +390,10 @@ func (a *App) runUpdate(args []string) int {
 			continue
 		}
 
-		progress.RenderStart(i, len(tasks), TaskResult{Name: task.Name, Status: StatusRunning})
+		stopProgress := progress.Animate(i, len(tasks), TaskResult{Name: task.Name, Status: StatusRunning})
 		start := time.Now()
 		res := task.Run(ctx, a.Runner, opts)
+		stopProgress()
 		res.Name = task.Name
 		res.Duration = time.Since(start)
 		results = append(results, res)

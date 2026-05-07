@@ -20,17 +20,6 @@ const (
 	StatusRunning TaskStatus = "running"
 )
 
-const (
-	iconBrew    = "󰇥"
-	iconCask    = "󰀻"
-	iconAmp     = "󰚩"
-	iconYazi    = ""
-	iconNvim    = ""
-	iconMason   = "󰏗"
-	iconNPM     = ""
-	iconCleanup = "󰃢"
-)
-
 type UpdateOptions struct {
 	DryRun bool
 	Config Config
@@ -150,14 +139,14 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 		return TaskResult{Status: StatusOK}
 	}
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d formulae", len(formulae)), Summary: iconLines(iconBrew, formulae)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d formulae", len(formulae)), Summary: summaryLines(formulae)}
 	}
 	args := append([]string{"upgrade"}, formulae...)
 	upgrade := r.Run(ctx, "brew", args...)
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(formulae)), Summary: iconLines(iconBrew, formulae)}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(formulae)), Summary: summaryLines(formulae)}
 }
 
 func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -179,14 +168,14 @@ func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult 
 		return TaskResult{Status: StatusOK}
 	}
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d casks", len(casks)), Summary: iconLines(iconCask, casks)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d casks", len(casks)), Summary: summaryLines(casks)}
 	}
 	args := append([]string{"upgrade", "--cask", "--greedy"}, casks...)
 	upgrade := r.Run(ctx, "brew", args...)
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(casks)), Summary: iconLines(iconCask, casks)}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(casks)), Summary: summaryLines(casks)}
 }
 
 func runAmp(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -203,7 +192,7 @@ func runAmp(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	}
 	after := strings.TrimSpace(r.Run(ctx, "amp", "--version").Stdout)
 	if before != "" && after != "" && before != after {
-		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{iconAmp + " amp"}}
+		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{"amp"}}
 	}
 	return TaskResult{Status: StatusOK}
 }
@@ -217,7 +206,7 @@ func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	selected := filterNames(mapNames(before), opts.Config.Tasks["yazi"])
 	before = pickVersionMap(before, selected)
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d plugins", len(selected)), Summary: iconLines(iconYazi, selected)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d plugins", len(selected)), Summary: summaryLines(selected)}
 	}
 	if len(selected) == 0 {
 		return TaskResult{Status: StatusOK}
@@ -229,7 +218,7 @@ func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	}
 	afterOut := r.Run(ctx, "ya", "pkg", "list")
 	after := pickVersionMap(parseYaziPlugins(afterOut.Stdout), selected)
-	summary := diffVersionMap(iconYazi, before, after)
+	summary := diffVersionMap(before, after)
 	if len(summary) == 0 {
 		return TaskResult{Status: StatusOK}
 	}
@@ -248,7 +237,7 @@ func runNPM(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	selected := filterNames(mapNames(before), opts.Config.Tasks["npm"])
 	before = pickVersionMap(before, selected)
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d packages", len(selected)), Summary: iconLines(iconNPM, selected)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d packages", len(selected)), Summary: summaryLines(selected)}
 	}
 	if len(selected) == 0 {
 		return TaskResult{Status: StatusOK}
@@ -263,7 +252,7 @@ func runNPM(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	}
 	afterOut := r.Run(ctx, "npm", "list", "-g", "--depth=0", "--json")
 	after := pickVersionMap(parseNPMGlobals(afterOut.Stdout), selected)
-	summary := diffVersionMap(iconNPM, before, after)
+	summary := diffVersionMap(before, after)
 	if len(summary) == 0 {
 		return TaskResult{Status: StatusOK}
 	}
@@ -281,7 +270,7 @@ func runBrewCleanup(ctx context.Context, r Runner, opts UpdateOptions) TaskResul
 	if cleanup.Err != nil {
 		return failed(cleanup)
 	}
-	return TaskResult{Status: StatusOK, Message: "done", Summary: []string{iconCleanup + " cleanup"}}
+	return TaskResult{Status: StatusOK, Message: "done", Summary: []string{"cleanup"}}
 }
 
 func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
@@ -355,8 +344,8 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		afterPack = pickVersionMap(afterPack, packNames)
 	}
 
-	summary := diffVersionMap(iconNvim, beforeLazy, afterLazy)
-	summary = append(summary, diffVersionMap(iconNvim, beforePack, afterPack)...)
+	summary := diffVersionMap(beforeLazy, afterLazy)
+	summary = append(summary, diffVersionMap(beforePack, afterPack)...)
 	if len(summary) == 0 {
 		return TaskResult{Status: StatusOK, Output: combinedOutput.String()}
 	}
@@ -377,7 +366,7 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	var summary []string
 	for _, line := range nonEmptyLines(out.Combined()) {
 		if strings.HasPrefix(line, "MASON_UPDATED:") {
-			summary = append(summary, iconMason+" "+strings.TrimPrefix(line, "MASON_UPDATED:"))
+			summary = append(summary, strings.TrimPrefix(line, "MASON_UPDATED:"))
 		}
 	}
 	if len(summary) == 0 {
@@ -401,15 +390,15 @@ func nonEmptyLines(text string) []string {
 	return lines
 }
 
-func iconLines(icon string, values []string) []string {
+func summaryLines(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		out = append(out, icon+" "+value)
+		out = append(out, value)
 	}
 	return out
 }
 
-func diffVersionMap(icon string, before, after map[string]string) []string {
+func diffVersionMap(before, after map[string]string) []string {
 	var names []string
 	for name := range before {
 		names = append(names, name)
@@ -421,7 +410,7 @@ func diffVersionMap(icon string, before, after map[string]string) []string {
 		oldVersion := before[name]
 		newVersion := after[name]
 		if newVersion != "" && newVersion != oldVersion {
-			summary = append(summary, icon+" "+name)
+			summary = append(summary, name)
 		}
 	}
 
@@ -433,7 +422,7 @@ func diffVersionMap(icon string, before, after map[string]string) []string {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		summary = append(summary, icon+" "+name)
+		summary = append(summary, name)
 	}
 	return summary
 }
@@ -722,7 +711,7 @@ mason.setup({
     height = 0.7,
     icons = {
       package_installed = '',
-      package_pending = '󰔟',
+      package_pending = '⠋',
       package_uninstalled = '',
     },
   },

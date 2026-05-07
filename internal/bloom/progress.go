@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -20,6 +22,7 @@ type Progress struct {
 	cfg        Config
 	terminal   bool
 	lineActive bool
+	mu         sync.Mutex
 }
 
 func NewProgress(out io.Writer, cfg Config) *Progress {
@@ -27,6 +30,12 @@ func NewProgress(out io.Writer, cfg Config) *Progress {
 }
 
 func (p *Progress) Render(done, total int, result TaskResult) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.renderLocked(done, total, result, "")
+}
+
+func (p *Progress) renderLocked(done, total int, result TaskResult, markerOverride string) {
 	marker := ""
 	color := colorGreen
 	if result.Status == StatusSkipped {
@@ -38,8 +47,11 @@ func (p *Progress) Render(done, total int, result TaskResult) {
 		color = colorCyan
 	}
 	if result.Status == StatusRunning {
-		marker = "󰔟"
+		marker = spinnerFrames[0]
 		color = colorCyan
+	}
+	if markerOverride != "" {
+		marker = markerOverride
 	}
 	if result.Err != nil {
 		marker = ""
@@ -74,12 +86,47 @@ func (p *Progress) RenderStart(done, total int, result TaskResult) {
 	p.Render(done, total, result)
 }
 
+func (p *Progress) Animate(done, total int, result TaskResult) func() {
+	if !p.terminal {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+
+		frame := 0
+		for {
+			p.mu.Lock()
+			p.renderLocked(done, total, result, spinnerFrames[frame])
+			p.mu.Unlock()
+			frame = (frame + 1) % len(spinnerFrames)
+
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-stopped
+	}
+}
+
 func (p *Progress) Finish() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.terminal && p.lineActive {
 		fmt.Fprintln(p.out)
 		p.lineActive = false
 	}
 }
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (p *Progress) Bar(done, total int) string {
 	width := p.cfg.ProgressWidth

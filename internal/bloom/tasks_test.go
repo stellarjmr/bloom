@@ -44,8 +44,8 @@ func TestParseNPMGlobals(t *testing.T) {
 func TestDiffVersionMap(t *testing.T) {
 	before := map[string]string{"a": "1", "b": "1"}
 	after := map[string]string{"a": "2", "b": "1", "c": "1"}
-	got := diffVersionMap("*", before, after)
-	want := []string{"* a", "* c"}
+	got := diffVersionMap(before, after)
+	want := []string{"a", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
 	}
@@ -86,6 +86,28 @@ func TestProgressRenderStartDoesNotDuplicateNonTerminalOutput(t *testing.T) {
 	want := "[━━━━━━━━] 100%  npm 1 package"
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestProgressRunningMarkerUsesSpinnerFrame(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Color = false
+	cfg.ProgressWidth = 8
+	var out bytes.Buffer
+	NewProgress(&out, cfg).Render(0, 1, TaskResult{Name: "npm", Status: StatusRunning})
+
+	got := strings.TrimSpace(out.String())
+	want := "[────────]   0% ⠋ npm"
+	if got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestSummaryLinesDoNotUseIconPrefix(t *testing.T) {
+	got := summaryLines([]string{"npm", "@scope/tool"})
+	want := []string{"npm", "@scope/tool"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
 	}
 }
 
