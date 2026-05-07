@@ -32,7 +32,7 @@ bm config path               # print config path
 bm config init               # create ~/.config/bloom/config.toml
 ```
 
-Bloom uses Nerd Font icons in the menu and progress states. Use a Nerd Font in your terminal for the intended display.
+Bloom uses portable terminal symbols so the interface works in standard terminal fonts.
 
 ## Default Tasks
 
