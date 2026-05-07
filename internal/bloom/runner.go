@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"sync"
 )
 
 type Runner interface {
@@ -45,4 +46,38 @@ func (OSRunner) Run(ctx context.Context, name string, args ...string) CommandOut
 		Stderr: stderr.String(),
 		Err:    err,
 	}
+}
+
+type cachedRunner struct {
+	runner  Runner
+	mu      sync.Mutex
+	lookups map[string]cachedLookup
+}
+
+type cachedLookup struct {
+	path string
+	err  error
+}
+
+func newCachedRunner(runner Runner) *cachedRunner {
+	return &cachedRunner{
+		runner:  runner,
+		lookups: map[string]cachedLookup{},
+	}
+}
+
+func (r *cachedRunner) LookPath(file string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if result, ok := r.lookups[file]; ok {
+		return result.path, result.err
+	}
+	path, err := r.runner.LookPath(file)
+	r.lookups[file] = cachedLookup{path: path, err: err}
+	return path, err
+}
+
+func (r *cachedRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
+	return r.runner.Run(ctx, name, args...)
 }

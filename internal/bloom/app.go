@@ -369,7 +369,8 @@ func (a *App) runUpdate(args []string) int {
 		fmt.Fprintf(a.Err, "task error: %v\n", err)
 		return 1
 	}
-	tasks = filterRunnableTasks(tasks, a.Runner)
+	runner := newCachedRunner(a.Runner)
+	tasks = filterRunnableTasks(tasks, runner)
 	if len(tasks) == 0 {
 		fmt.Fprintln(a.Out, "no available tasks selected")
 		return 0
@@ -392,7 +393,7 @@ func (a *App) runUpdate(args []string) int {
 
 		stopProgress := progress.Animate(i, len(tasks), TaskResult{Name: task.Name, Status: StatusRunning})
 		start := time.Now()
-		res := task.Run(ctx, a.Runner, opts)
+		res := task.Run(ctx, runner, opts)
 		stopProgress()
 		res.Name = task.Name
 		res.Duration = time.Since(start)
@@ -406,20 +407,21 @@ func (a *App) runUpdate(args []string) int {
 			}
 		}
 	}
-	progress.Finish()
 
 	failures := 0
-	summaries := 0
 	for _, res := range results {
 		if res.Err != nil {
 			failures++
 		}
+	}
+	if failures == 0 {
+		progress.Render(len(tasks), len(tasks), TaskResult{Name: "done!", Status: StatusOK})
+	}
+	progress.Finish()
+
+	for _, res := range results {
 		for _, line := range res.Summary {
-			if summaries == 0 {
-				fmt.Fprintln(a.Out)
-			}
 			fmt.Fprintln(a.Out, line)
-			summaries++
 		}
 	}
 

@@ -45,61 +45,61 @@ type Task struct {
 	Run             func(context.Context, Runner, UpdateOptions) TaskResult
 }
 
-func BuildTasks(cfg Config) ([]Task, error) {
-	builtins := map[string]Task{
-		"brew": {
-			Name:            "brew",
-			Description:     "Update outdated Homebrew formulae",
-			RequiredCommand: "brew",
-			Run:             runBrewFormulae,
-		},
-		"cask": {
-			Name:            "cask",
-			Description:     "Update outdated Homebrew casks",
-			RequiredCommand: "brew",
-			Run:             runBrewCasks,
-		},
-		"amp": {
-			Name:            "amp",
-			Description:     "Run amp update",
-			RequiredCommand: "amp",
-			Run:             runAmp,
-		},
-		"yazi": {
-			Name:            "yazi",
-			Description:     "Update Yazi plugins",
-			RequiredCommand: "ya",
-			Run:             runYazi,
-		},
-		"nvim": {
-			Name:            "nvim",
-			Description:     "Update lazy.nvim and vim.pack Neovim plugins",
-			RequiredCommand: "nvim",
-			Run:             runNeovim,
-		},
-		"mason": {
-			Name:            "mason",
-			Description:     "Update Mason packages",
-			RequiredCommand: "nvim",
-			Run:             runMason,
-		},
-		"npm": {
-			Name:            "npm",
-			Description:     "Update global npm packages",
-			RequiredCommand: "npm",
-			Run:             runNPM,
-		},
-		"cleanup": {
-			Name:            "cleanup",
-			Description:     "Run brew cleanup",
-			RequiredCommand: "brew",
-			Run:             runBrewCleanup,
-		},
-	}
+var builtinTasks = map[string]Task{
+	"brew": {
+		Name:            "brew",
+		Description:     "Update outdated Homebrew formulae",
+		RequiredCommand: "brew",
+		Run:             runBrewFormulae,
+	},
+	"cask": {
+		Name:            "cask",
+		Description:     "Update outdated Homebrew casks",
+		RequiredCommand: "brew",
+		Run:             runBrewCasks,
+	},
+	"amp": {
+		Name:            "amp",
+		Description:     "Run amp update",
+		RequiredCommand: "amp",
+		Run:             runAmp,
+	},
+	"yazi": {
+		Name:            "yazi",
+		Description:     "Update Yazi plugins",
+		RequiredCommand: "ya",
+		Run:             runYazi,
+	},
+	"nvim": {
+		Name:            "nvim",
+		Description:     "Update lazy.nvim and vim.pack Neovim plugins",
+		RequiredCommand: "nvim",
+		Run:             runNeovim,
+	},
+	"mason": {
+		Name:            "mason",
+		Description:     "Update Mason packages",
+		RequiredCommand: "nvim",
+		Run:             runMason,
+	},
+	"npm": {
+		Name:            "npm",
+		Description:     "Update global npm packages",
+		RequiredCommand: "npm",
+		Run:             runNPM,
+	},
+	"cleanup": {
+		Name:            "cleanup",
+		Description:     "Run brew cleanup",
+		RequiredCommand: "brew",
+		Run:             runBrewCleanup,
+	},
+}
 
+func BuildTasks(cfg Config) ([]Task, error) {
 	tasks := make([]Task, 0, len(cfg.TaskOrder))
 	for _, name := range cfg.TaskOrder {
-		task, ok := builtins[name]
+		task, ok := builtinTasks[name]
 		if !ok {
 			return nil, fmt.Errorf("unknown configured task %q", name)
 		}
@@ -381,7 +381,14 @@ func failed(out CommandOutput) TaskResult {
 
 func nonEmptyLines(text string) []string {
 	var lines []string
-	for _, line := range strings.Split(text, "\n") {
+	for text != "" {
+		line := text
+		if before, after, ok := strings.Cut(text, "\n"); ok {
+			line = before
+			text = after
+		} else {
+			text = ""
+		}
 		line = strings.TrimSpace(line)
 		if line != "" {
 			lines = append(lines, line)
@@ -391,21 +398,17 @@ func nonEmptyLines(text string) []string {
 }
 
 func summaryLines(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		out = append(out, value)
-	}
-	return out
+	return append([]string(nil), values...)
 }
 
 func diffVersionMap(before, after map[string]string) []string {
-	var names []string
+	names := make([]string, 0, len(before))
 	for name := range before {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	var summary []string
+	summary := make([]string, 0, len(before)+len(after))
 	for _, name := range names {
 		oldVersion := before[name]
 		newVersion := after[name]
@@ -428,14 +431,20 @@ func diffVersionMap(before, after map[string]string) []string {
 }
 
 func filterNames(values []string, cfg TaskConfig) []string {
-	available := map[string]bool{}
-	for _, value := range values {
-		available[value] = true
+	if len(values) == 0 {
+		return nil
+	}
+	if len(cfg.Include) == 0 && len(cfg.Exclude) == 0 {
+		return append([]string(nil), values...)
 	}
 
-	var filtered []string
+	filtered := make([]string, 0, len(values))
 	if len(cfg.Include) > 0 {
-		seen := map[string]bool{}
+		available := make(map[string]bool, len(values))
+		for _, value := range values {
+			available[value] = true
+		}
+		seen := make(map[string]bool, len(cfg.Include))
 		for _, value := range cfg.Include {
 			if available[value] && !seen[value] {
 				filtered = append(filtered, value)
@@ -470,8 +479,9 @@ func resolveBrewFormulaNames(ctx context.Context, r Runner, outdated []string) [
 	if out.Err != nil {
 		return outdated
 	}
-	fullNamesByShort := map[string]string{}
-	for _, name := range nonEmptyLines(out.Stdout) {
+	fullNames := nonEmptyLines(out.Stdout)
+	fullNamesByShort := make(map[string]string, len(fullNames))
+	for _, name := range fullNames {
 		fullNamesByShort[brewShortName(name)] = name
 	}
 	resolved := make([]string, 0, len(outdated))
@@ -563,7 +573,7 @@ func parseNPMGlobals(output string) map[string]string {
 	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
 		return map[string]string{}
 	}
-	result := map[string]string{}
+	result := make(map[string]string, len(parsed.Dependencies))
 	for name, dep := range parsed.Dependencies {
 		if dep.Version != "" {
 			result[name] = dep.Version
@@ -583,7 +593,7 @@ func parseLazyLockFile(path string) map[string]string {
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		return map[string]string{}
 	}
-	result := map[string]string{}
+	result := make(map[string]string, len(parsed))
 	for name, item := range parsed {
 		if item.Commit != "" {
 			result[name] = item.Commit
@@ -605,7 +615,7 @@ func parsePackLockFile(path string) map[string]string {
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		return map[string]string{}
 	}
-	result := map[string]string{}
+	result := make(map[string]string, len(parsed.Plugins))
 	for name, item := range parsed.Plugins {
 		if item.Rev != "" {
 			result[name] = item.Rev

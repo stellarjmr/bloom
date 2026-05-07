@@ -214,3 +214,96 @@ func TestRunBrewFormulaeDryRunDoesNotUpdateMetadata(t *testing.T) {
 		t.Fatalf("calls = %#v, want %#v", r.calls, want)
 	}
 }
+
+func TestRunBrewCasksUsesOfficialHomebrewCommands(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string]CommandOutput{
+			"brew update":                           {},
+			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
+			"brew upgrade --cask --greedy iterm2":   {},
+		},
+	}
+
+	res := runBrewCasks(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"brew update",
+		"brew outdated --quiet --cask --greedy",
+		"brew upgrade --cask --greedy iterm2",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunAmpUsesOfficialUpdateCommand(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"amp": true},
+		outputs: map[string]CommandOutput{
+			"amp --version": {Stdout: "1.0.0\n"},
+			"amp update":    {},
+		},
+	}
+
+	res := runAmp(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"amp --version",
+		"amp update",
+		"amp --version",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunYaziUsesOfficialPackageUpdateCommand(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"ya": true},
+		outputs: map[string]CommandOutput{
+			"ya pkg list":            {Stdout: "Plugins:\n  foo/bar (abc123)\n"},
+			"ya pkg upgrade foo/bar": {},
+		},
+	}
+
+	res := runYazi(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"ya pkg list",
+		"ya pkg upgrade foo/bar",
+		"ya pkg list",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunNPMUsesOfficialGlobalUpdateCommand(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"npm": true},
+		outputs: map[string]CommandOutput{
+			"npm list -g --depth=0 --json": {Stdout: `{"dependencies":{"npm":{"version":"1.0.0"}}}`},
+			"npm update -g":                {},
+		},
+	}
+
+	res := runNPM(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"npm list -g --depth=0 --json",
+		"npm update -g",
+		"npm list -g --depth=0 --json",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
