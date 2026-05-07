@@ -10,6 +10,7 @@ BLUE=$'\033[0;34m'
 GRAY=$'\033[0;90m'
 RED=$'\033[0;31m'
 NC=$'\033[0m'
+CLEAR_EOL=$'\033[K'
 
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
@@ -69,18 +70,14 @@ core() {
 }
 
 clear_screen() { printf '\033[2J\033[H'; }
-DRAW_STARTED=false
 MENU_SCREEN_ACTIVE=false
 begin_draw() {
-  if [[ "${DRAW_STARTED:-false}" == "true" ]]; then
-    printf '\033[H\033[J'
-  else
-    clear_screen
-    DRAW_STARTED=true
-  fi
+  # Redraw in place; clearing before every frame causes visible flicker while scrolling.
+  printf '\033[H'
 }
 end_draw() { printf '\033[J'; }
-reset_draw() { DRAW_STARTED=false; }
+reset_draw() { true; }
+blank_line() { printf '%s\n' "$CLEAR_EOL"; }
 clear_for_command() {
   reset_draw
   clear_screen
@@ -155,11 +152,11 @@ drain_pending_input() {
 
 show_brand_banner() {
   cat <<EOF
-${GREEN} ____  _                       ${NC}
-${GREEN}| __ )| | ___   ___  _ __ ___  ${NC}
-${GREEN}|  _ \| |/ _ \ / _ \| '_ \` _ \ ${NC}
-${GREEN}| |_) | | (_) | (_) | | | | | |${NC}  ${BLUE}https://github.com/stellarjmr/bloom${NC}
-${GREEN}|____/|_|\___/ \___/|_| |_| |_|${NC}  ${GREEN}Update developer tools fast.${NC}
+${GREEN} ____  _                       ${NC}${CLEAR_EOL}
+${GREEN}| __ )| | ___   ___  _ __ ___  ${NC}${CLEAR_EOL}
+${GREEN}|  _ \| |/ _ \ / _ \| '_ \` _ \ ${NC}${CLEAR_EOL}
+${GREEN}| |_) | | (_) | (_) | | | | | |${NC}  ${BLUE}https://github.com/stellarjmr/bloom${NC}${CLEAR_EOL}
+${GREEN}|____/|_|\___/ \___/|_| |_| |_|${NC}  ${GREEN}Update developer tools fast.${NC}${CLEAR_EOL}
 EOF
 }
 
@@ -168,9 +165,9 @@ menu_option() {
   local text="$2"
   local selected="$3"
   if [[ "$selected" == "true" ]]; then
-    printf '%b> %s. %s%b\n' "$CYAN" "$number" "$text" "$NC"
+    printf '%b> %s. %s%b%s\n' "$CYAN" "$number" "$text" "$NC" "$CLEAR_EOL"
   else
-    printf '  %s. %s\n' "$number" "$text"
+    printf '  %s. %s%s\n' "$number" "$text" "$CLEAR_EOL"
   fi
 }
 
@@ -178,7 +175,7 @@ draw_menu() {
   local selected="$1"
   begin_draw
   show_brand_banner
-  printf '\n'
+  blank_line
   menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
   menu_option 2 "Check        Choose available updates" "$([[ $selected -eq 2 ]] && echo true || echo false)"
   menu_option 3 "List         Show configured tasks" "$([[ $selected -eq 3 ]] && echo true || echo false)"
@@ -186,7 +183,9 @@ draw_menu() {
   menu_option 5 "Config       Manage tasks and packages" "$([[ $selected -eq 5 ]] && echo true || echo false)"
   menu_option 6 "Init Config  Create default config" "$([[ $selected -eq 6 ]] && echo true || echo false)"
   menu_option 7 "Help         Show commands" "$([[ $selected -eq 7 ]] && echo true || echo false)"
-  printf '\n%b↑↓/jk | Enter | 1-7 | V Version | Q Quit%b\n\n' "$GRAY" "$NC"
+  blank_line
+  printf '%b↑↓/jk | Enter | 1-7 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  blank_line
   end_draw
 }
 
@@ -374,7 +373,8 @@ multi_select() {
       done
 
       begin_draw
-      printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
+      printf '%b%s%b  %b%d/%d selected%b%s\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC" "$CLEAR_EOL"
+      blank_line
       for ((i = start; i <= end; i++)); do
         mark="○"
         [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
@@ -385,7 +385,8 @@ multi_select() {
           printf '  %s %s\033[K\n' "$mark" "$label"
         fi
       done
-      printf '\n%b↑↓/jk | Space | Enter Save | Q Cancel%b\n' "$GRAY" "$NC"
+      blank_line
+      printf '%b↑↓/jk | Space | Enter Save | Q Cancel%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
       end_draw
       dirty=false
     fi
@@ -461,7 +462,8 @@ check_select_updates() {
       done
 
       begin_draw
-      printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
+      printf '%b%s%b  %b%d/%d selected%b%s\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC" "$CLEAR_EOL"
+      blank_line
       for ((i = start; i <= end; i++)); do
         mark="○"
         [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
@@ -472,7 +474,8 @@ check_select_updates() {
           printf '  %s %s\033[K\n' "$mark" "$label"
         fi
       done
-      printf '\n%b↑↓/jk | Space Select | Enter Update | Q Back%b\n' "$GRAY" "$NC"
+      blank_line
+      printf '%b↑↓/jk | Space Select | Enter Update | Q Back%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
       end_draw
       dirty=false
     fi
@@ -534,7 +537,8 @@ select_one() {
       max_label=$((width - 4))
       [[ "$max_label" -lt 8 ]] && max_label=8
       begin_draw
-      printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
+      printf '%b%s%b%s\n' "$BLUE" "$title" "$NC" "$CLEAR_EOL"
+      blank_line
       for ((i = 0; i < total; i++)); do
         label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
         if [[ "$i" -eq "$selected" ]]; then
@@ -543,7 +547,8 @@ select_one() {
           printf '  %s\033[K\n' "$label"
         fi
       done
-      printf '\n%b↑↓/jk | Enter | Q Cancel%b\n' "$GRAY" "$NC"
+      blank_line
+      printf '%b↑↓/jk | Enter | Q Cancel%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
       end_draw
       dirty=false
     fi
@@ -627,13 +632,15 @@ draw_config_menu() {
   local selected="$1"
   begin_draw
   show_brand_banner
-  printf '\n'
+  blank_line
   menu_option 1 "Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
   menu_option 2 "Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
   menu_option 3 "Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
   menu_option 4 "Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
   menu_option 5 "Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  printf '\n%b↑↓/jk | Enter | 1-5 | Q Back%b\n\n' "$GRAY" "$NC"
+  blank_line
+  printf '%b↑↓/jk | Enter | 1-5 | Q Back%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  blank_line
   end_draw
 }
 
