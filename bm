@@ -11,6 +11,21 @@ GRAY=$'\033[0;90m'
 RED=$'\033[0;31m'
 NC=$'\033[0m'
 
+ICON_ARROW=""
+ICON_UPDATE="󰚰"
+ICON_LIST=""
+ICON_DOCTOR="󰒓"
+ICON_CONFIG=""
+ICON_INIT="󰝒"
+ICON_HELP="󰋖"
+ICON_TASKS=""
+ICON_PACKAGES=""
+ICON_PATH="󰉋"
+ICON_RESET="󰁯"
+ICON_BACK=""
+ICON_SELECTED=""
+ICON_UNSELECTED=""
+
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
   local dir target
@@ -69,6 +84,21 @@ core() {
 }
 
 clear_screen() { printf '\033[2J\033[H'; }
+DRAW_STARTED=false
+begin_draw() {
+  if [[ "${DRAW_STARTED:-false}" == "true" ]]; then
+    printf '\033[H'
+  else
+    clear_screen
+    DRAW_STARTED=true
+  fi
+}
+end_draw() { printf '\033[J'; }
+reset_draw() { DRAW_STARTED=false; }
+clear_for_command() {
+  reset_draw
+  clear_screen
+}
 hide_cursor() { [[ -t 1 ]] && printf '\033[?25l' || true; }
 show_cursor() { [[ -t 1 ]] && printf '\033[?25h' || true; }
 
@@ -134,7 +164,7 @@ menu_option() {
   local text="$2"
   local selected="$3"
   if [[ "$selected" == "true" ]]; then
-    printf '%b> %s. %s%b\n' "$CYAN" "$number" "$text" "$NC"
+    printf '%b%s %s. %s%b\n' "$CYAN" "$ICON_ARROW" "$number" "$text" "$NC"
   else
     printf '  %s. %s\n' "$number" "$text"
   fi
@@ -142,16 +172,17 @@ menu_option() {
 
 draw_menu() {
   local selected="$1"
-  clear_screen
+  begin_draw
   show_brand_banner
   printf '\n'
-  menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "List         Show configured tasks" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "Doctor       Check missing tools" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "Config       Manage tasks and packages" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Init Config  Create default config" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 1 "$ICON_UPDATE Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
+  menu_option 2 "$ICON_LIST List         Show configured tasks" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "$ICON_DOCTOR Doctor       Check missing tools" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "$ICON_CONFIG Config       Manage tasks and packages" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "$ICON_INIT Init Config  Create default config" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "$ICON_HELP Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
   printf '\n%b↑↓/jk | Enter | 1-6 | V Version | Q Quit%b\n\n' "$GRAY" "$NC"
+  end_draw
 }
 
 show_help() {
@@ -172,13 +203,18 @@ show_help() {
 
 run_menu_selection() {
   case "$1" in
-  1) exec "$0" update ;;
+  1)
+    show_cursor
+    clear_for_command
+    core update
+    exit $?
+    ;;
   2) exec "$0" list ;;
   3) exec "$0" doctor ;;
   4) exec "$0" config ;;
   5) exec "$0" config init ;;
   6)
-    clear_screen
+    clear_for_command
     show_help
     exit 0
     ;;
@@ -191,15 +227,28 @@ interactive_menu() {
     return 0
   fi
 
-  local selected=1 key
+  local selected=1 key dirty=true
   trap 'show_cursor; exit 130' INT TERM
   hide_cursor
   while true; do
-    draw_menu "$selected"
+    if [[ "$dirty" == "true" ]]; then
+      draw_menu "$selected"
+      dirty=false
+    fi
     key="$(read_key)"
     case "$key" in
-    "UP") ((selected > 1)) && selected=$((selected - 1)) ;;
-    "DOWN") ((selected < 6)) && selected=$((selected + 1)) ;;
+    "UP")
+      if ((selected > 1)); then
+        selected=$((selected - 1))
+        dirty=true
+      fi
+      ;;
+    "DOWN")
+      if ((selected < 6)); then
+        selected=$((selected + 1))
+        dirty=true
+      fi
+      ;;
     "ENTER")
       show_cursor
       run_menu_selection "$selected"
@@ -210,19 +259,19 @@ interactive_menu() {
       ;;
     "VERSION")
       show_cursor
-      clear_screen
+      clear_for_command
       core --version
       exit 0
       ;;
     "HELP")
       show_cursor
-      clear_screen
+      clear_for_command
       show_help
       exit 0
       ;;
     "QUIT")
       show_cursor
-      clear_screen
+      clear_for_command
       exit 0
       ;;
     esac
@@ -247,7 +296,7 @@ multi_select() {
   local total="${#MS_VALUES[@]}"
   MS_RESULT_VALUES=()
   if [[ "$total" -eq 0 ]]; then
-    clear_screen
+    clear_for_command
     printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
     printf '%bNo items available%b\n\n' "$GRAY" "$NC"
     printf '%bPress any key to return%b\n' "$GRAY" "$NC"
@@ -255,50 +304,66 @@ multi_select() {
     return 1
   fi
 
-  local selected=0 top=0 key visible height max_visible start end i count mark
+  local selected=0 top=0 key visible height max_visible start end i count mark dirty=true
   trap 'show_cursor; exit 130' INT TERM
+  reset_draw
   hide_cursor
   while true; do
-    height="$(terminal_height)"
-    max_visible=$((height - 6))
-    [[ "$max_visible" -lt 1 ]] && max_visible=1
-    [[ "$max_visible" -gt 16 ]] && max_visible=16
-    [[ "$selected" -lt "$top" ]] && top="$selected"
-    if [[ "$selected" -ge $((top + max_visible)) ]]; then
-      top=$((selected - max_visible + 1))
-    fi
-    start="$top"
-    end=$((top + max_visible - 1))
-    [[ "$end" -ge $((total - 1)) ]] && end=$((total - 1))
-
-    count=0
-    for ((i = 0; i < total; i++)); do
-      [[ "${MS_SELECTED[i]}" == "true" ]] && count=$((count + 1))
-    done
-
-    clear_screen
-    printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
-    for ((i = start; i <= end; i++)); do
-      mark="○"
-      [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
-      if [[ "$i" -eq "$selected" ]]; then
-        printf '%b> %s %s%b\n' "$CYAN" "$mark" "${MS_LABELS[i]}" "$NC"
-      else
-        printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
+    if [[ "$dirty" == "true" ]]; then
+      height="$(terminal_height)"
+      max_visible=$((height - 6))
+      [[ "$max_visible" -lt 1 ]] && max_visible=1
+      [[ "$max_visible" -gt 16 ]] && max_visible=16
+      [[ "$selected" -lt "$top" ]] && top="$selected"
+      if [[ "$selected" -ge $((top + max_visible)) ]]; then
+        top=$((selected - max_visible + 1))
       fi
-    done
-    printf '\n%b↑↓/jk | Space | Enter Save | Q Cancel%b\n' "$GRAY" "$NC"
+      start="$top"
+      end=$((top + max_visible - 1))
+      [[ "$end" -ge $((total - 1)) ]] && end=$((total - 1))
+
+      count=0
+      for ((i = 0; i < total; i++)); do
+        [[ "${MS_SELECTED[i]}" == "true" ]] && count=$((count + 1))
+      done
+
+      begin_draw
+      printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
+      for ((i = start; i <= end; i++)); do
+        mark="$ICON_UNSELECTED"
+        [[ "${MS_SELECTED[i]}" == "true" ]] && mark="$ICON_SELECTED"
+        if [[ "$i" -eq "$selected" ]]; then
+          printf '%b%s %s %s%b\n' "$CYAN" "$ICON_ARROW" "$mark" "${MS_LABELS[i]}" "$NC"
+        else
+          printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
+        fi
+      done
+      printf '\n%b↑↓/jk | Space | Enter Save | Q Cancel%b\n' "$GRAY" "$NC"
+      end_draw
+      dirty=false
+    fi
 
     key="$(read_key)"
     case "$key" in
-    "UP") ((selected > 0)) && selected=$((selected - 1)) ;;
-    "DOWN") ((selected < total - 1)) && selected=$((selected + 1)) ;;
+    "UP")
+      if ((selected > 0)); then
+        selected=$((selected - 1))
+        dirty=true
+      fi
+      ;;
+    "DOWN")
+      if ((selected < total - 1)); then
+        selected=$((selected + 1))
+        dirty=true
+      fi
+      ;;
     "SPACE")
       if [[ "${MS_SELECTED[selected]}" == "true" ]]; then
         MS_SELECTED[selected]=false
       else
         MS_SELECTED[selected]=true
       fi
+      dirty=true
       ;;
     "ENTER")
       show_cursor
@@ -322,25 +387,40 @@ select_one() {
   MS_RESULT_VALUES=()
   [[ "$total" -eq 0 ]] && return 1
 
-  local selected=0 key i
+  local selected=0 key i dirty=true
   trap 'show_cursor; exit 130' INT TERM
+  reset_draw
   hide_cursor
   while true; do
-    clear_screen
-    printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
-    for ((i = 0; i < total; i++)); do
-      if [[ "$i" -eq "$selected" ]]; then
-        printf '%b> %s%b\n' "$CYAN" "${MS_LABELS[i]}" "$NC"
-      else
-        printf '  %s\n' "${MS_LABELS[i]}"
-      fi
-    done
-    printf '\n%b↑↓/jk | Enter | Q Cancel%b\n' "$GRAY" "$NC"
+    if [[ "$dirty" == "true" ]]; then
+      begin_draw
+      printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
+      for ((i = 0; i < total; i++)); do
+        if [[ "$i" -eq "$selected" ]]; then
+          printf '%b%s %s%b\n' "$CYAN" "$ICON_ARROW" "${MS_LABELS[i]}" "$NC"
+        else
+          printf '  %s\n' "${MS_LABELS[i]}"
+        fi
+      done
+      printf '\n%b↑↓/jk | Enter | Q Cancel%b\n' "$GRAY" "$NC"
+      end_draw
+      dirty=false
+    fi
 
     key="$(read_key)"
     case "$key" in
-    "UP") ((selected > 0)) && selected=$((selected - 1)) ;;
-    "DOWN") ((selected < total - 1)) && selected=$((selected + 1)) ;;
+    "UP")
+      if ((selected > 0)); then
+        selected=$((selected - 1))
+        dirty=true
+      fi
+      ;;
+    "DOWN")
+      if ((selected < total - 1)); then
+        selected=$((selected + 1))
+        dirty=true
+      fi
+      ;;
     "ENTER")
       show_cursor
       MS_RESULT_VALUES=("${MS_VALUES[selected]}")
@@ -357,15 +437,16 @@ select_one() {
 
 draw_config_menu() {
   local selected="$1"
-  clear_screen
+  begin_draw
   show_brand_banner
   printf '\n'
-  menu_option 1 "Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 1 "$ICON_TASKS Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
+  menu_option 2 "$ICON_PACKAGES Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "$ICON_PATH Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "$ICON_RESET Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "$ICON_BACK Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
   printf '\n%b↑↓/jk | Enter | 1-5 | Q Back%b\n\n' "$GRAY" "$NC"
+  end_draw
 }
 
 configure_tasks() {
@@ -433,7 +514,7 @@ configure_packages() {
 
   if multi_select "Select ${task} Packages"; then
     if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
-      clear_screen
+      clear_for_command
       printf '%bNo packages selected.%b\n\n' "$BLUE" "$NC"
       printf 'Package filters were not changed. Disable the task from %bTasks%b if you want to skip it entirely.\n\n' "$GREEN" "$NC"
       printf '%bPress any key to return%b\n' "$GRAY" "$NC"
@@ -447,7 +528,7 @@ configure_packages() {
 }
 
 reset_config() {
-  clear_screen
+  clear_for_command
   printf '%bReset Bloom config to defaults?%b\n\n' "$BLUE" "$NC"
   printf '%bEnter%b Reset | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
   local key
@@ -462,7 +543,7 @@ run_config_selection() {
   1) configure_tasks ;;
   2) configure_packages ;;
   3)
-    clear_screen
+    clear_for_command
     core config path
     printf '\n%bPress any key to return%b\n' "$GRAY" "$NC"
     read_key >/dev/null
@@ -470,6 +551,7 @@ run_config_selection() {
   4) reset_config ;;
   5) return 1 ;;
   esac
+  reset_draw
   return 0
 }
 
@@ -479,24 +561,39 @@ interactive_config_menu() {
     return 0
   fi
 
-  local selected=1 key
+  local selected=1 key dirty=true
   trap 'show_cursor; exit 130' INT TERM
   hide_cursor
   while true; do
-    draw_config_menu "$selected"
+    if [[ "$dirty" == "true" ]]; then
+      draw_config_menu "$selected"
+      dirty=false
+    fi
     key="$(read_key)"
     case "$key" in
-    "UP") ((selected > 1)) && selected=$((selected - 1)) ;;
-    "DOWN") ((selected < 5)) && selected=$((selected + 1)) ;;
+    "UP")
+      if ((selected > 1)); then
+        selected=$((selected - 1))
+        dirty=true
+      fi
+      ;;
+    "DOWN")
+      if ((selected < 5)); then
+        selected=$((selected + 1))
+        dirty=true
+      fi
+      ;;
     "ENTER")
       show_cursor
       run_config_selection "$selected" || return 0
       hide_cursor
+      dirty=true
       ;;
     "CHAR:"*)
       show_cursor
       run_config_selection "${key#CHAR:}" || return 0
       hide_cursor
+      dirty=true
       ;;
     "QUIT")
       show_cursor

@@ -390,6 +390,7 @@ func (a *App) runUpdate(args []string) int {
 			continue
 		}
 
+		progress.RenderStart(i, len(tasks), TaskResult{Name: task.Name, Status: StatusRunning})
 		start := time.Now()
 		res := task.Run(ctx, a.Runner, opts)
 		res.Name = task.Name

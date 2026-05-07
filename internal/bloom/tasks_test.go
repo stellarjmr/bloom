@@ -1,6 +1,7 @@
 package bloom
 
 import (
+	"bytes"
 	"context"
 	"reflect"
 	"strings"
@@ -68,6 +69,23 @@ func TestProgressBarNoColor(t *testing.T) {
 	want := "[━╸──────]  25%"
 	if bar != want {
 		t.Fatalf("bar = %q, want %q", bar, want)
+	}
+}
+
+func TestProgressRenderStartDoesNotDuplicateNonTerminalOutput(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Color = false
+	cfg.ProgressWidth = 8
+	var out bytes.Buffer
+	progress := NewProgress(&out, cfg)
+
+	progress.RenderStart(0, 1, TaskResult{Name: "npm", Status: StatusRunning})
+	progress.Render(1, 1, TaskResult{Name: "npm", Status: StatusDryRun, Message: "1 package"})
+
+	got := strings.TrimSpace(out.String())
+	want := "[━━━━━━━━] 100%  npm 1 package"
+	if got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 

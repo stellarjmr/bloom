@@ -17,13 +17,14 @@ const (
 	StatusOK      TaskStatus = "ok"
 	StatusSkipped TaskStatus = "skipped"
 	StatusDryRun  TaskStatus = "dry-run"
+	StatusRunning TaskStatus = "running"
 )
 
 const (
 	iconBrew    = "󰇥"
 	iconCask    = "󰀻"
-	iconAmp     = "AI"
-	iconYazi    = "🦆"
+	iconAmp     = "󰚩"
+	iconYazi    = ""
 	iconNvim    = ""
 	iconMason   = "󰏗"
 	iconNPM     = ""
@@ -720,9 +721,9 @@ mason.setup({
     width = 0.7,
     height = 0.7,
     icons = {
-      package_installed = '✓',
-      package_pending = '➜',
-      package_uninstalled = '✗',
+      package_installed = '',
+      package_pending = '󰔟',
+      package_uninstalled = '',
     },
   },
 })

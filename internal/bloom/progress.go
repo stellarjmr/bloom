@@ -27,18 +27,22 @@ func NewProgress(out io.Writer, cfg Config) *Progress {
 }
 
 func (p *Progress) Render(done, total int, result TaskResult) {
-	marker := "✓"
+	marker := ""
 	color := colorGreen
 	if result.Status == StatusSkipped {
-		marker = "·"
+		marker = ""
 		color = colorGray
 	}
 	if result.Status == StatusDryRun {
-		marker = "…"
+		marker = ""
+		color = colorCyan
+	}
+	if result.Status == StatusRunning {
+		marker = "󰔟"
 		color = colorCyan
 	}
 	if result.Err != nil {
-		marker = "✗"
+		marker = ""
 		color = colorRed
 	}
 
@@ -61,6 +65,13 @@ func (p *Progress) Render(done, total int, result TaskResult) {
 		return
 	}
 	fmt.Fprintln(p.out, line)
+}
+
+func (p *Progress) RenderStart(done, total int, result TaskResult) {
+	if !p.terminal {
+		return
+	}
+	p.Render(done, total, result)
 }
 
 func (p *Progress) Finish() {

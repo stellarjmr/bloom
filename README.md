@@ -1,22 +1,21 @@
-# bm
+# Bloom
 
-`bm` is a config-driven terminal updater for developer tools on macOS.
+<p align="center">
+  <img src="assets/bloom_logo.png" alt="Bloom logo" width="150">
+</p>
 
-It is designed to replace one-off update scripts with a fast shortcut:
+Bloom is a config-driven terminal updater for developer tools on macOS. The command is intentionally short: `bm` opens the menu, and `bm update` runs the updater directly.
 
-`bm` opens the interactive menu. `bm update` runs the updater directly.
+![Bloom menu](assets/UI.png)
 
 ## Install
-
-The intended install path is Homebrew:
 
 ```bash
 brew tap stellarjmr/tool
 brew install stellarjmr/tool/bloom
 ```
 
-The Homebrew formula is published from the `stellarjmr/tool` tap.
-Homebrew installs prebuilt release binaries, so Go is only needed when building from source.
+The Homebrew formula installs prebuilt release binaries, so Go is only needed when building from source.
 
 ## Commands
 
@@ -33,20 +32,21 @@ bm config path               # print config path
 bm config init               # create ~/.config/bloom/config.toml
 ```
 
+Bloom uses Nerd Font icons in the menu, progress state, and update summaries. Use a Nerd Font in your terminal for the intended display.
+
 ## Default Tasks
 
-The built-in task set mirrors the original `update-all.sh` workflow:
+The default task set updates everything Bloom can detect:
 
 - `brew`: Homebrew formula updates
 - `cask`: Homebrew cask updates
 - `amp`: `amp update`
 - `yazi`: Yazi plugin updates
-- `nvim`: Neovim plugin updates for both lazy.nvim/LazyVim and `vim.pack`
+- `nvim`: Neovim plugin updates for lazy.nvim/LazyVim and `vim.pack`
 - `mason`: Mason package updates
 - `npm`: global npm package updates
 
-Missing tools are skipped during `bm update` and are not counted in the progress total.
-For real Homebrew updates, `bm` refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
+Missing tools are skipped during `bm update` and are not counted in the progress total. For Homebrew updates, Bloom refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
 
 ## Config
 
@@ -62,13 +62,13 @@ Create it with:
 bm config init
 ```
 
-The config supports task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update everything that exists. Run `bm config` to manage tasks and package filters with a Space-select menu, or edit the TOML directly. See `config.example.toml`.
+The config controls task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update every detected package. Run `bm config` to manage tasks and package filters with a Space-select menu, or edit the TOML directly. See `config.example.toml`.
 
 ## Neovim
 
-`bm` supports both common plugin paths:
+Bloom supports both common plugin paths:
 
-- LazyVim/lazy.nvim: detects `lazy-lock.json` and runs headless `Lazy! sync`.
-- Native `vim.pack`: detects `nvim-pack-lock.json` and runs headless `vim.pack.update(nil, { force = true })`.
+- LazyVim/lazy.nvim: detects `lazy-lock.json` and runs headless `lazy.sync({ wait = true, show = false })`.
+- Native `vim.pack`: detects `nvim-pack-lock.json` and runs headless `vim.pack.update(..., { force = true })`.
 
 If both lockfiles exist, lazy.nvim runs first and `vim.pack` runs second.
