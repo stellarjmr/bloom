@@ -83,7 +83,7 @@ func TestProgressRenderStartDoesNotDuplicateNonTerminalOutput(t *testing.T) {
 	progress.Render(1, 1, TaskResult{Name: "npm", Status: StatusDryRun, Message: "1 package"})
 
 	got := strings.TrimSpace(out.String())
-	want := "[━━━━━━━━] 100%  npm 1 package"
+	want := "[━━━━━━━━] 100% … npm 1 package"
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
@@ -108,6 +108,33 @@ func TestSummaryLinesDoNotUseIconPrefix(t *testing.T) {
 	want := []string{"npm", "@scope/tool"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestProgressMarkersUsePortableSymbols(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Color = false
+	cfg.ProgressWidth = 8
+	cases := []struct {
+		name string
+		res  TaskResult
+		want string
+	}{
+		{name: "ok", res: TaskResult{Name: "brew", Status: StatusOK}, want: "[━━━━━━━━] 100% ✓ brew"},
+		{name: "skipped", res: TaskResult{Name: "brew", Status: StatusSkipped}, want: "[━━━━━━━━] 100% · brew"},
+		{name: "dry-run", res: TaskResult{Name: "brew", Status: StatusDryRun}, want: "[━━━━━━━━] 100% … brew"},
+		{name: "failed", res: TaskResult{Name: "brew", Err: errNotFound}, want: "[━━━━━━━━] 100% ✗ brew"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			NewProgress(&out, cfg).Render(1, 1, tt.res)
+			got := strings.TrimSpace(out.String())
+			if got != tt.want {
+				t.Fatalf("output = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

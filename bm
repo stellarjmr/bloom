@@ -11,21 +11,6 @@ GRAY=$'\033[0;90m'
 RED=$'\033[0;31m'
 NC=$'\033[0m'
 
-ICON_ARROW=""
-ICON_UPDATE="󰚰"
-ICON_LIST=""
-ICON_DOCTOR="󰒓"
-ICON_CONFIG=""
-ICON_INIT="󰝒"
-ICON_HELP="󰋖"
-ICON_TASKS=""
-ICON_PACKAGES=""
-ICON_PATH="󰉋"
-ICON_RESET="󰁯"
-ICON_BACK=""
-ICON_SELECTED=""
-ICON_UNSELECTED=""
-
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
   local dir target
@@ -164,7 +149,7 @@ menu_option() {
   local text="$2"
   local selected="$3"
   if [[ "$selected" == "true" ]]; then
-    printf '%b%s %s. %s%b\n' "$CYAN" "$ICON_ARROW" "$number" "$text" "$NC"
+    printf '%b> %s. %s%b\n' "$CYAN" "$number" "$text" "$NC"
   else
     printf '  %s. %s\n' "$number" "$text"
   fi
@@ -175,12 +160,12 @@ draw_menu() {
   begin_draw
   show_brand_banner
   printf '\n'
-  menu_option 1 "$ICON_UPDATE Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "$ICON_LIST List         Show configured tasks" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "$ICON_DOCTOR Doctor       Check missing tools" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "$ICON_CONFIG Config       Manage tasks and packages" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "$ICON_INIT Init Config  Create default config" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "$ICON_HELP Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
+  menu_option 2 "List         Show configured tasks" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "Doctor       Check missing tools" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "Config       Manage tasks and packages" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "Init Config  Create default config" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
   printf '\n%b↑↓/jk | Enter | 1-6 | V Version | Q Quit%b\n\n' "$GRAY" "$NC"
   end_draw
 }
@@ -330,10 +315,10 @@ multi_select() {
       begin_draw
       printf '%b%s%b  %b%d/%d selected%b\n\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC"
       for ((i = start; i <= end; i++)); do
-        mark="$ICON_UNSELECTED"
-        [[ "${MS_SELECTED[i]}" == "true" ]] && mark="$ICON_SELECTED"
+        mark="○"
+        [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
         if [[ "$i" -eq "$selected" ]]; then
-          printf '%b%s %s %s%b\n' "$CYAN" "$ICON_ARROW" "$mark" "${MS_LABELS[i]}" "$NC"
+          printf '%b> %s %s%b\n' "$CYAN" "$mark" "${MS_LABELS[i]}" "$NC"
         else
           printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
         fi
@@ -397,7 +382,7 @@ select_one() {
       printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
       for ((i = 0; i < total; i++)); do
         if [[ "$i" -eq "$selected" ]]; then
-          printf '%b%s %s%b\n' "$CYAN" "$ICON_ARROW" "${MS_LABELS[i]}" "$NC"
+          printf '%b> %s%b\n' "$CYAN" "${MS_LABELS[i]}" "$NC"
         else
           printf '  %s\n' "${MS_LABELS[i]}"
         fi
@@ -440,11 +425,11 @@ draw_config_menu() {
   begin_draw
   show_brand_banner
   printf '\n'
-  menu_option 1 "$ICON_TASKS Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "$ICON_PACKAGES Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "$ICON_PATH Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "$ICON_RESET Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "$ICON_BACK Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 1 "Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
+  menu_option 2 "Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
   printf '\n%b↑↓/jk | Enter | 1-5 | Q Back%b\n\n' "$GRAY" "$NC"
   end_draw
 }

@@ -36,14 +36,14 @@ func (p *Progress) Render(done, total int, result TaskResult) {
 }
 
 func (p *Progress) renderLocked(done, total int, result TaskResult, markerOverride string) {
-	marker := ""
+	marker := "✓"
 	color := colorGreen
 	if result.Status == StatusSkipped {
-		marker = ""
+		marker = "·"
 		color = colorGray
 	}
 	if result.Status == StatusDryRun {
-		marker = ""
+		marker = "…"
 		color = colorCyan
 	}
 	if result.Status == StatusRunning {
@@ -54,7 +54,7 @@ func (p *Progress) renderLocked(done, total int, result TaskResult, markerOverri
 		marker = markerOverride
 	}
 	if result.Err != nil {
-		marker = ""
+		marker = "✗"
 		color = colorRed
 	}
 

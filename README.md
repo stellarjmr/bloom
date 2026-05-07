@@ -1,7 +1,7 @@
 # Bloom
 
 <p align="center">
-  <img src="assets/bloom_logo.png" alt="Bloom logo" width="150">
+  <img src="assets/bloom_logo.png" alt="Bloom logo" width="100">
 </p>
 
 Bloom is a config-driven terminal updater for developer tools on macOS. The command is intentionally short: `bm` opens the menu, and `bm update` runs the updater directly.
@@ -32,7 +32,7 @@ bm config path               # print config path
 bm config init               # create ~/.config/bloom/config.toml
 ```
 
-Bloom uses Nerd Font icons in the menu and progress states. Use a Nerd Font in your terminal for the intended display.
+Bloom uses portable terminal symbols so the interface works in standard terminal fonts.
 
 ## Default Tasks
 
