@@ -73,7 +73,7 @@ DRAW_STARTED=false
 MENU_SCREEN_ACTIVE=false
 begin_draw() {
   if [[ "${DRAW_STARTED:-false}" == "true" ]]; then
-    printf '\033[H'
+    printf '\033[H\033[J'
   else
     clear_screen
     DRAW_STARTED=true
@@ -309,6 +309,31 @@ terminal_height() {
   printf '%s\n' "$height"
 }
 
+terminal_width() {
+  local width
+  width="$(stty size 2>/dev/null | awk '{print $2}' || true)"
+  [[ "$width" =~ ^[0-9]+$ ]] || width=80
+  printf '%s\n' "$width"
+}
+
+fit_label() {
+  local text="$1"
+  local max="$2"
+  if ((max <= 0)); then
+    printf '\n'
+    return 0
+  fi
+  if ((${#text} > max)); then
+    if ((max > 1)); then
+      printf '%s…\n' "${text:0:max-1}"
+    else
+      printf '%s\n' "${text:0:max}"
+    fi
+    return 0
+  fi
+  printf '%s\n' "$text"
+}
+
 multi_select() {
   local title="$1"
   local total="${#MS_VALUES[@]}"
@@ -322,16 +347,19 @@ multi_select() {
     return 1
   fi
 
-  local selected=0 top=0 key visible height max_visible start end i count mark dirty=true
+  local selected=0 top=0 key visible height width max_visible max_label start end i count mark label dirty=true
   trap 'leave_menu_screen; exit 130' INT TERM
   reset_draw
   hide_cursor
   while true; do
     if [[ "$dirty" == "true" ]]; then
       height="$(terminal_height)"
+      width="$(terminal_width)"
       max_visible=$((height - 6))
+      max_label=$((width - 6))
       [[ "$max_visible" -lt 1 ]] && max_visible=1
       [[ "$max_visible" -gt 16 ]] && max_visible=16
+      [[ "$max_label" -lt 8 ]] && max_label=8
       [[ "$selected" -lt "$top" ]] && top="$selected"
       if [[ "$selected" -ge $((top + max_visible)) ]]; then
         top=$((selected - max_visible + 1))
@@ -350,10 +378,11 @@ multi_select() {
       for ((i = start; i <= end; i++)); do
         mark="○"
         [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
+        label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
         if [[ "$i" -eq "$selected" ]]; then
-          printf '%b> %s %s%b\n' "$CYAN" "$mark" "${MS_LABELS[i]}" "$NC"
+          printf '%b> %s %s%b\033[K\n' "$CYAN" "$mark" "$label" "$NC"
         else
-          printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
+          printf '  %s %s\033[K\n' "$mark" "$label"
         fi
       done
       printf '\n%b↑↓/jk | Space | Enter Save | Q Cancel%b\n' "$GRAY" "$NC"
@@ -405,16 +434,19 @@ check_select_updates() {
   MS_RESULT_VALUES=()
   [[ "$total" -eq 0 ]] && return 1
 
-  local selected=0 top=0 key height max_visible start end i count mark dirty=true
+  local selected=0 top=0 key height width max_visible max_label start end i count mark label dirty=true
   trap 'leave_menu_screen; exit 130' INT TERM
   reset_draw
   hide_cursor
   while true; do
     if [[ "$dirty" == "true" ]]; then
       height="$(terminal_height)"
+      width="$(terminal_width)"
       max_visible=$((height - 6))
+      max_label=$((width - 6))
       [[ "$max_visible" -lt 1 ]] && max_visible=1
       [[ "$max_visible" -gt 18 ]] && max_visible=18
+      [[ "$max_label" -lt 8 ]] && max_label=8
       [[ "$selected" -lt "$top" ]] && top="$selected"
       if [[ "$selected" -ge $((top + max_visible)) ]]; then
         top=$((selected - max_visible + 1))
@@ -433,10 +465,11 @@ check_select_updates() {
       for ((i = start; i <= end; i++)); do
         mark="○"
         [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
+        label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
         if [[ "$i" -eq "$selected" ]]; then
-          printf '%b> %s %s%b\n' "$CYAN" "$mark" "${MS_LABELS[i]}" "$NC"
+          printf '%b> %s %s%b\033[K\n' "$CYAN" "$mark" "$label" "$NC"
         else
-          printf '  %s %s\n' "$mark" "${MS_LABELS[i]}"
+          printf '  %s %s\033[K\n' "$mark" "$label"
         fi
       done
       printf '\n%b↑↓/jk | Space Select | Enter Update | Q Back%b\n' "$GRAY" "$NC"
@@ -491,19 +524,23 @@ select_one() {
   MS_RESULT_VALUES=()
   [[ "$total" -eq 0 ]] && return 1
 
-  local selected=0 key i dirty=true
+  local selected=0 key i width max_label label dirty=true
   trap 'leave_menu_screen; exit 130' INT TERM
   reset_draw
   hide_cursor
   while true; do
     if [[ "$dirty" == "true" ]]; then
+      width="$(terminal_width)"
+      max_label=$((width - 4))
+      [[ "$max_label" -lt 8 ]] && max_label=8
       begin_draw
       printf '%b%s%b\n\n' "$BLUE" "$title" "$NC"
       for ((i = 0; i < total; i++)); do
+        label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
         if [[ "$i" -eq "$selected" ]]; then
-          printf '%b> %s%b\n' "$CYAN" "${MS_LABELS[i]}" "$NC"
+          printf '%b> %s%b\033[K\n' "$CYAN" "$label" "$NC"
         else
-          printf '  %s\n' "${MS_LABELS[i]}"
+          printf '  %s\033[K\n' "$label"
         fi
       done
       printf '\n%b↑↓/jk | Enter | Q Cancel%b\n' "$GRAY" "$NC"

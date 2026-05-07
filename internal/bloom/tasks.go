@@ -65,7 +65,7 @@ var builtinTasks = map[string]Task{
 	},
 	"amp": {
 		Name:            "amp",
-		Description:     "Run amp update",
+		Description:     "Update ampcode cli",
 		RequiredCommand: "amp",
 		Run:             runAmp,
 	},
