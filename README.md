@@ -21,9 +21,11 @@ The Homebrew formula installs prebuilt release binaries, so Go is only needed wh
 
 ```bash
 bm                           # open the interactive menu
+bm check                     # list available package updates
 bm update                    # run enabled update tasks
 bm update --dry-run          # inspect selected tasks without updating
 bm update --only nvim        # run one task
+bm update --package npm:pkg  # run one package from a task
 bm update --skip npm         # skip a task
 bm list                      # list configured tasks
 bm doctor                    # show available and missing tools

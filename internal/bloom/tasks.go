@@ -45,6 +45,11 @@ type Task struct {
 	Run             func(context.Context, Runner, UpdateOptions) TaskResult
 }
 
+type UpdateItem struct {
+	Task string
+	Name string
+}
+
 var builtinTasks = map[string]Task{
 	"brew": {
 		Name:            "brew",
@@ -109,6 +114,120 @@ func BuildTasks(cfg Config) ([]Task, error) {
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
+}
+
+func CheckUpdates(ctx context.Context, r Runner, cfg Config) ([]UpdateItem, error) {
+	tasks, err := BuildTasks(cfg)
+	if err != nil {
+		return nil, err
+	}
+	tasks = filterRunnableTasks(tasks, r)
+
+	var items []UpdateItem
+	homebrewMetadataUpdated := false
+	for _, task := range tasks {
+		switch task.Name {
+		case "brew":
+			if err := updateHomebrewMetadataOnce(ctx, r, &homebrewMetadataUpdated); err != nil {
+				return nil, err
+			}
+			names, err := checkBrewFormulaUpdates(ctx, r, cfg.Tasks["brew"])
+			if err != nil {
+				return nil, err
+			}
+			items = appendUpdateItems(items, "brew", names)
+		case "cask":
+			if err := updateHomebrewMetadataOnce(ctx, r, &homebrewMetadataUpdated); err != nil {
+				return nil, err
+			}
+			names, err := checkBrewCaskUpdates(ctx, r, cfg.Tasks["cask"])
+			if err != nil {
+				return nil, err
+			}
+			items = appendUpdateItems(items, "cask", names)
+		case "mason":
+			names, err := checkMasonUpdates(ctx, r, cfg.Tasks["mason"])
+			if err != nil {
+				return nil, err
+			}
+			items = appendUpdateItems(items, "mason", names)
+		case "npm":
+			names, err := checkNPMUpdates(ctx, r, cfg.Tasks["npm"])
+			if err != nil {
+				return nil, err
+			}
+			items = appendUpdateItems(items, "npm", names)
+		}
+	}
+	return items, nil
+}
+
+func appendUpdateItems(items []UpdateItem, task string, names []string) []UpdateItem {
+	for _, name := range names {
+		items = append(items, UpdateItem{Task: task, Name: name})
+	}
+	return items
+}
+
+func updateHomebrewMetadataOnce(ctx context.Context, r Runner, updated *bool) error {
+	if *updated {
+		return nil
+	}
+	out := r.Run(ctx, "brew", "update")
+	if out.Err != nil {
+		return commandError(out)
+	}
+	*updated = true
+	return nil
+}
+
+func checkBrewFormulaUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, error) {
+	outdated := r.Run(ctx, "brew", "outdated", "--quiet", "--formula")
+	if outdated.Err != nil {
+		return nil, commandError(outdated)
+	}
+	return filterNames(resolveBrewFormulaNames(ctx, r, nonEmptyLines(outdated.Stdout)), cfg), nil
+}
+
+func checkBrewCaskUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, error) {
+	outdated := r.Run(ctx, "brew", "outdated", "--quiet", "--cask", "--greedy")
+	if outdated.Err != nil {
+		return nil, commandError(outdated)
+	}
+	return filterNames(nonEmptyLines(outdated.Stdout), cfg), nil
+}
+
+func checkNPMUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, error) {
+	out := r.Run(ctx, "npm", "outdated", "-g", "--json", "--depth=0")
+	names, err := parseNPMOutdated(out.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	if out.Err != nil && len(names) == 0 && strings.TrimSpace(out.Stdout) == "" {
+		return nil, commandError(out)
+	}
+	return filterNames(names, cfg), nil
+}
+
+func checkMasonUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, error) {
+	out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonCheckLua(cfg.Include, cfg.Exclude), "+qa")
+	if out.Err != nil {
+		return nil, commandError(out)
+	}
+	var names []string
+	for _, line := range nonEmptyLines(out.Combined()) {
+		if strings.HasPrefix(line, "MASON_OUTDATED:") {
+			names = append(names, strings.TrimPrefix(line, "MASON_OUTDATED:"))
+		}
+	}
+	return uniqueStrings(names), nil
+}
+
+func commandError(out CommandOutput) error {
+	if text := strings.TrimSpace(out.Combined()); text != "" {
+		return fmt.Errorf("%w: %s", out.Err, text)
+	}
+	return out.Err
 }
 
 func requireCommand(r Runner, taskName, command, hint string) (TaskResult, bool) {
@@ -582,6 +701,25 @@ func parseNPMGlobals(output string) map[string]string {
 	return result
 }
 
+func parseNPMOutdated(output string) ([]string, error) {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil, nil
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(parsed))
+	for name := range parsed {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func parseLazyLockFile(path string) map[string]string {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -759,6 +897,63 @@ a.run_blocking(function()
     end)
     a.scheduler()
     vim.api.nvim_out_write(('MASON_UPDATED:%s\n'):format(pkg.name))
+  end
+end)
+`
+	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
+	lua = strings.ReplaceAll(lua, "__BLOOM_EXCLUDE__", luaStringArray(exclude))
+	return lua
+}
+
+func masonCheckLua(include, exclude []string) string {
+	lua := `
+local include = __BLOOM_INCLUDE__
+local exclude = __BLOOM_EXCLUDE__
+local include_set = {}
+local exclude_set = {}
+for _, name in ipairs(include) do
+  include_set[name] = true
+end
+for _, name in ipairs(exclude) do
+  exclude_set[name] = true
+end
+
+local function wants_package(name)
+  if next(include_set) ~= nil and not include_set[name] then
+    return false
+  end
+  return not exclude_set[name]
+end
+
+local ok_lazy, lazy = pcall(require, 'lazy')
+if ok_lazy then
+  lazy.load({ plugins = { 'mason.nvim' } })
+end
+
+local ok_mason, mason = pcall(require, 'mason')
+if not ok_mason then
+  vim.api.nvim_out_write('MASON_MISSING\n')
+  return
+end
+
+mason.setup({})
+
+local a = require('mason-core.async')
+local registry = require('mason-registry')
+
+a.run_blocking(function()
+  local ok, result = a.wait(registry.update)
+  a.scheduler()
+  if not ok then
+    error(('Failed to update Mason registries: %s'):format(vim.inspect(result)))
+  end
+
+  for _, pkg in ipairs(registry.get_installed_packages()) do
+    local current_version = pkg:get_installed_version()
+    local latest_version = pkg:get_latest_version()
+    if current_version ~= latest_version and wants_package(pkg.name) then
+      vim.api.nvim_out_write(('MASON_OUTDATED:%s\n'):format(pkg.name))
+    end
   end
 end)
 `
