@@ -27,6 +27,9 @@ bm update --dry-run          # inspect selected tasks without updating
 bm update --only nvim        # run one task
 bm update --package npm:pkg  # run one package from a task
 bm update --skip npm         # skip a task
+bm uninstall                 # remove apps and their leftovers
+bm uninstall --list          # list installed apps as TSV
+bm uninstall --dry-run --app /Applications/Foo.app
 bm list                      # list configured tasks
 bm doctor                    # show available and missing tools
 bm config                    # open the interactive config menu
@@ -49,6 +52,27 @@ The default task set updates everything Bloom can detect:
 - `npm`: global npm package updates
 
 Missing tools are skipped during `bm update` and are not counted in the progress total. For Homebrew updates, Bloom refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
+
+## Uninstall
+
+`bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies).
+
+The interactive flow lives at menu item 2:
+
+- All apps start unselected. `Space` toggles. `Enter` removes the cursor item when nothing is selected, or every selected item otherwise.
+- Each row shows the app name, on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.
+- The summary lists every removed path under each app (`✓` removed, `·` would-remove).
+
+Per-app cleanup runs in this order so brew can detect and clean its own metadata:
+
+1. Quit the app, unload its `LaunchAgents`.
+2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --zap --force <token>`, then verify with `brew list --cask`.
+3. Remove the bundle and the matching `~/Library` entries.
+4. Remove the macOS Login Item, unregister the bundle from LaunchServices.
+
+After the batch completes Bloom rewrites the Dock plist, restarts Dock, rebuilds the LaunchServices database, and runs `brew autoremove` if any cask was removed.
+
+Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear in the menu.
 
 ## Config
 
