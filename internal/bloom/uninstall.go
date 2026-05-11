@@ -794,60 +794,33 @@ func isValidCaskToken(token string) bool {
 // removePathStubborn deletes p, retrying for paths that resist Go's
 // os.RemoveAll. macOS sandboxed app containers under
 // ~/Library/Containers/<bundleID> often carry the user-immutable flag,
-// no-write permissions, large extended attributes, or have descriptors
-// held by containermanagerd. The fallback clears those attributes and
-// shells out to BSD rm, which is what every macOS uninstaller relies on.
+// no-write permissions, or extended attributes that Go's pure-Go walker
+// cannot strip. The fallback clears those flags and shells out to the
+// system rm, which is what every macOS uninstaller relies on.
 func removePathStubborn(ctx context.Context, runner Runner, p string) error {
-	// Stage 1: plain Go RemoveAll.
-	stage1 := os.RemoveAll(p)
-	if !pathExists(p) {
-		return nil
-	}
-
-	// Stage 2: clear immutable / sticky flags and grant write perms,
-	// then retry Go RemoveAll.
-	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
-	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
-	stage2 := os.RemoveAll(p)
-	if !pathExists(p) {
-		return nil
-	}
-
-	// Stage 3: strip every extended attribute on the tree (the giant
-	// com.apple.data-container-personality blob can choke RemoveAll).
-	_ = runner.Run(ctx, "/usr/bin/xattr", "-rc", p)
-	stage3 := os.RemoveAll(p)
-	if !pathExists(p) {
-		return nil
-	}
-
-	// Stage 4: delegate to BSD rm.
-	rmOut := runner.Run(ctx, "/bin/rm", "-rfv", p)
-	if !pathExists(p) {
-		return nil
-	}
-
-	// Surface the most actionable error available.
-	rmErr := strings.TrimSpace(rmOut.Combined())
-	if rmErr == "" {
-		if rmOut.Err != nil {
-			rmErr = rmOut.Err.Error()
-		} else if stage3 != nil {
-			rmErr = stage3.Error()
-		} else if stage2 != nil {
-			rmErr = stage2.Error()
-		} else if stage1 != nil {
-			rmErr = stage1.Error()
-		} else {
-			rmErr = "path still present after rm -rf"
+	if err := os.RemoveAll(p); err == nil {
+		if _, err := os.Lstat(p); err != nil {
+			return nil
 		}
 	}
-	return fmt.Errorf("%s", rmErr)
-}
-
-func pathExists(p string) bool {
-	_, err := os.Lstat(p)
-	return err == nil
+	// Best-effort: clear immutable + read-only attributes, then try again.
+	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd,noschg", p)
+	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
+	if err := os.RemoveAll(p); err == nil {
+		if _, err := os.Lstat(p); err != nil {
+			return nil
+		}
+	}
+	// Final fallback: delegate to BSD rm, which handles a few macOS edge
+	// cases (e.g. unusual extended attributes on sandboxed containers).
+	out := runner.Run(ctx, "/bin/rm", "-rf", p)
+	if _, err := os.Lstat(p); err != nil {
+		return nil
+	}
+	if out.Err != nil {
+		return out.Err
+	}
+	return fmt.Errorf("path still present after rm -rf")
 }
 
 func pathSizeKB(p string) int64 {
