@@ -822,27 +822,59 @@ func luaStringArray(values []string) string {
 // start, or a custom pack group all work).
 func masonLocateLua() string {
 	return `
-local function _bloom_mason_locate(name)
-  local data = vim.fn.stdpath('data')
-  local candidates = {
-    data .. '/lazy/' .. name,
-    data .. '/site/pack/core/start/' .. name,
-    data .. '/site/pack/core/opt/' .. name,
-  }
-  for _, p in ipairs(candidates) do
-    if vim.fn.isdirectory(p) == 1 then return p end
+local function _bloom_dir_exists(p)
+  return p ~= nil and p ~= '' and vim.fn.isdirectory(p) == 1
+end
+
+-- Locate a plugin directory regardless of plugin manager.
+-- Covers lazy.nvim, vim.pack (any group), packer, mini.deps, pckr, rocks.nvim,
+-- the user's own packpath additions and anything in &rtp / &packpath.
+local function _bloom_locate_plugin(name)
+  local seen = {}
+  local function try(p)
+    if not p or p == '' or seen[p] then return nil end
+    seen[p] = true
+    if _bloom_dir_exists(p) then return p end
+    return nil
   end
-  for _, p in ipairs(vim.fn.glob(data .. '/site/pack/*/start/' .. name, true, true)) do
-    if vim.fn.isdirectory(p) == 1 then return p end
+
+  local roots = {}
+  roots[#roots + 1] = vim.fn.stdpath('data')
+  roots[#roots + 1] = vim.fn.stdpath('data') .. '/site'
+  for _, p in ipairs(vim.opt.packpath:get()) do roots[#roots + 1] = p end
+
+  for _, root in ipairs(roots) do
+    local hit = try(root .. '/lazy/' .. name)
+      or try(root .. '/pack/core/start/' .. name)
+      or try(root .. '/pack/core/opt/' .. name)
+    if hit then return hit end
+    for _, p in ipairs(vim.fn.glob(root .. '/pack/*/start/' .. name, true, true)) do
+      if _bloom_dir_exists(p) then return p end
+    end
+    for _, p in ipairs(vim.fn.glob(root .. '/pack/*/opt/' .. name, true, true)) do
+      if _bloom_dir_exists(p) then return p end
+    end
   end
-  for _, p in ipairs(vim.fn.glob(data .. '/site/pack/*/opt/' .. name, true, true)) do
-    if vim.fn.isdirectory(p) == 1 then return p end
+
+  -- Already on runtimepath?
+  for _, p in ipairs(vim.opt.rtp:get()) do
+    if p:sub(-#name) == name and _bloom_dir_exists(p) then return p end
   end
+
+  -- Last resort: deep search for the canonical entry file under stdpath('data').
+  if name == 'mason.nvim' then
+    local found = vim.fn.globpath(vim.fn.stdpath('data'), '**/lua/mason/init.lua', true, true)
+    for _, file in ipairs(found) do
+      local plugin = vim.fn.fnamemodify(file, ':h:h:h')
+      if _bloom_dir_exists(plugin) then return plugin end
+    end
+  end
+
   return nil
 end
 
 for _, name in ipairs({ 'mason.nvim', 'mason-registry' }) do
-  local path = _bloom_mason_locate(name)
+  local path = _bloom_locate_plugin(name)
   if path then
     vim.opt.rtp:prepend(path)
   end
