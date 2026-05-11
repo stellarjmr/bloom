@@ -431,10 +431,8 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return TaskResult{Status: StatusDryRun, Message: strings.Join(parts, ", ")}
 	}
 
-	var combinedOutput strings.Builder
 	if hasLazy && shouldRunPackageSet(lazyNames, taskCfg) {
 		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+lazyLua(lazyNames, hasPackageFilter(taskCfg)), "+qa")
-		combinedOutput.WriteString(out.Combined())
 		if out.Err != nil {
 			return TaskResult{Err: out.Err, Output: out.Combined()}
 		}
@@ -442,7 +440,6 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	if hasPack && shouldRunPackageSet(packNames, taskCfg) {
 		// vim.pack.update({names}, {force=true}) applies updates without the interactive confirmation buffer.
 		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+vimPackLua(packNames, hasPackageFilter(taskCfg)), "+qa")
-		combinedOutput.WriteString(out.Combined())
 		if out.Err != nil {
 			return TaskResult{Err: out.Err, Output: out.Combined()}
 		}
@@ -466,9 +463,9 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 	summary := diffVersionMap(beforeLazy, afterLazy)
 	summary = append(summary, diffVersionMap(beforePack, afterPack)...)
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK, Output: combinedOutput.String()}
+		return TaskResult{Status: StatusOK}
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary, Output: combinedOutput.String()}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary}
 }
 
 func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
