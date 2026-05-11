@@ -458,6 +458,9 @@ func (a *App) runUpdate(args []string) int {
 			if res.Output != "" {
 				fmt.Fprintln(a.Err, strings.TrimSpace(res.Output))
 			}
+		} else if res.Output != "" {
+			progress.Finish()
+			fmt.Fprintf(a.Err, "%s: %s\n", task.Name, strings.TrimSpace(res.Output))
 		}
 	}
 
