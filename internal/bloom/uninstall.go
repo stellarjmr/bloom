@@ -414,7 +414,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		if _, err := os.Lstat(p); err != nil {
 			continue
 		}
-		if err := os.RemoveAll(p); err != nil {
+		if err := removePathStubborn(ctx, runner, p); err != nil {
 			res.Failed = append(res.Failed, p)
 			continue
 		}
@@ -789,6 +789,38 @@ func isValidCaskToken(token string) bool {
 		}
 	}
 	return true
+}
+
+// removePathStubborn deletes p, retrying for paths that resist Go's
+// os.RemoveAll. macOS sandboxed app containers under
+// ~/Library/Containers/<bundleID> often carry the user-immutable flag,
+// no-write permissions, or extended attributes that Go's pure-Go walker
+// cannot strip. The fallback clears those flags and shells out to the
+// system rm, which is what every macOS uninstaller relies on.
+func removePathStubborn(ctx context.Context, runner Runner, p string) error {
+	if err := os.RemoveAll(p); err == nil {
+		if _, err := os.Lstat(p); err != nil {
+			return nil
+		}
+	}
+	// Best-effort: clear immutable + read-only attributes, then try again.
+	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd,noschg", p)
+	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
+	if err := os.RemoveAll(p); err == nil {
+		if _, err := os.Lstat(p); err != nil {
+			return nil
+		}
+	}
+	// Final fallback: delegate to BSD rm, which handles a few macOS edge
+	// cases (e.g. unusual extended attributes on sandboxed containers).
+	out := runner.Run(ctx, "/bin/rm", "-rf", p)
+	if _, err := os.Lstat(p); err != nil {
+		return nil
+	}
+	if out.Err != nil {
+		return out.Err
+	}
+	return fmt.Errorf("path still present after rm -rf")
 }
 
 func pathSizeKB(p string) int64 {
