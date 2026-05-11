@@ -96,9 +96,23 @@ end
 
 mason.setup({})
 
+local ok_async, a = pcall(require, 'mason-core.async')
 local registry = require('mason-registry')
-for _, pkg in ipairs(registry.get_installed_packages()) do
-  vim.api.nvim_out_write(('MASON_PACKAGE:%s\n'):format(pkg.name))
+
+local function emit_packages()
+  for _, pkg in ipairs(registry.get_installed_packages()) do
+    vim.api.nvim_out_write(('MASON_PACKAGE:%s\n'):format(pkg.name))
+  end
+end
+
+if ok_async and type(registry.refresh) == 'function' then
+  a.run_blocking(function()
+    a.wait(registry.refresh)
+    a.scheduler()
+    emit_packages()
+  end)
+else
+  emit_packages()
 end
 `
 }
