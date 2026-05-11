@@ -379,7 +379,7 @@ func matchInDir(dir, token string, out *[]string) {
 // bundle is deleted so it can detect its own artifact and clean its
 // receipt under Caskroom. Otherwise `brew list --cask` would still
 // report the cask as installed.
-func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool) UninstallResult {
+func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun, sudoActive bool) UninstallResult {
 	res := UninstallResult{App: app}
 	if app.Path == "" {
 		res.Err = errors.New("missing app path")
@@ -414,7 +414,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		if _, err := os.Lstat(p); err != nil {
 			continue
 		}
-		if err := removePathStubborn(ctx, runner, p); err != nil {
+		if err := removePathStubborn(ctx, runner, p, sudoActive); err != nil {
 			res.Failed = append(res.Failed, p)
 			continue
 		}
@@ -435,12 +435,27 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 
 // BatchUninstall removes a list of apps and then runs shared post-batch
 // cleanup once: refresh LaunchServices, remove Dock entries, run
-// `brew autoremove` if any cask was removed.
+// `brew autoremove` if any cask was removed. When any candidate path
+// lives in a TCC-restricted or system directory it prompts for the
+// admin password once at the start and keeps the sudo session alive
+// for the duration of the batch.
 func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun bool) BatchSummary {
 	var sum BatchSummary
 	anyBrew := false
+
+	sudoActive := false
+	if !dryRun && batchNeedsSudo(apps) {
+		stop, err := acquireSudo(ctx)
+		if err == nil {
+			sudoActive = true
+			defer stop()
+		}
+		// Failure is non-fatal; we fall back to non-sudo cleanup and
+		// the caller will see the unwritable paths in res.Failed.
+	}
+
 	for _, app := range apps {
-		res := UninstallApp(ctx, runner, app, dryRun)
+		res := UninstallApp(ctx, runner, app, dryRun, sudoActive)
 		sum.Results = append(sum.Results, res)
 		sum.TotalRemovedKB += res.RemovedKB
 		if res.BrewRemoved {
@@ -458,6 +473,62 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		sum.BrewAutoremove = out.Err == nil
 	}
 	return sum
+}
+
+// batchNeedsSudo reports whether any candidate path will likely require
+// admin privileges. macOS TCC restricts user-mode access to
+// ~/Library/Containers, ~/Library/Group Containers, and
+// ~/Library/Application Scripts unless the terminal has Full Disk Access;
+// anything under /Library is owned by root.
+func batchNeedsSudo(apps []AppEntry) bool {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return false
+	}
+	roots := []string{
+		filepath.Join(home, "Library", "Containers") + string(os.PathSeparator),
+		filepath.Join(home, "Library", "Group Containers") + string(os.PathSeparator),
+		filepath.Join(home, "Library", "Application Scripts") + string(os.PathSeparator),
+		"/Library/",
+	}
+	for _, app := range apps {
+		for _, p := range FindRelatedPaths(app) {
+			for _, root := range roots {
+				if strings.HasPrefix(p, root) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// acquireSudo prompts the user for the admin password once via the
+// terminal and starts a keepalive goroutine that pings `sudo -n -v`
+// every 60 seconds so subsequent sudo calls during the batch never
+// re-prompt. Returns a cancel function for the keepalive.
+func acquireSudo(ctx context.Context) (func(), error) {
+	cmd := exec.CommandContext(ctx, "sudo", "-v", "-p", "Bloom needs admin to remove protected files. Password: ")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return func() {}, err
+	}
+	keepCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepCtx.Done():
+				return
+			case <-ticker.C:
+				_ = exec.Command("sudo", "-n", "-v").Run()
+			}
+		}
+	}()
+	return cancel, nil
 }
 
 // removeLoginItem deletes a macOS Login Item entry whose name matches the app.
@@ -797,30 +868,34 @@ func isValidCaskToken(token string) bool {
 // no-write permissions, or extended attributes that Go's pure-Go walker
 // cannot strip. The fallback clears those flags and shells out to the
 // system rm, which is what every macOS uninstaller relies on.
-func removePathStubborn(ctx context.Context, runner Runner, p string) error {
+func removePathStubborn(ctx context.Context, runner Runner, p string, sudoActive bool) error {
 	if err := os.RemoveAll(p); err == nil {
 		if _, err := os.Lstat(p); err != nil {
 			return nil
 		}
 	}
-	// Best-effort: clear immutable + read-only attributes, then try again.
-	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd,noschg", p)
+	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
 	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
 	if err := os.RemoveAll(p); err == nil {
 		if _, err := os.Lstat(p); err != nil {
 			return nil
 		}
 	}
-	// Final fallback: delegate to BSD rm, which handles a few macOS edge
-	// cases (e.g. unusual extended attributes on sandboxed containers).
-	out := runner.Run(ctx, "/bin/rm", "-rf", p)
-	if _, err := os.Lstat(p); err != nil {
-		return nil
+	if out := runner.Run(ctx, "/bin/rm", "-rf", p); out.Err == nil {
+		if _, err := os.Lstat(p); err != nil {
+			return nil
+		}
 	}
-	if out.Err != nil {
-		return out.Err
+	if sudoActive {
+		_ = runner.Run(ctx, "sudo", "-n", "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
+		_ = runner.Run(ctx, "sudo", "-n", "/bin/chmod", "-R", "u+w", p)
+		if out := runner.Run(ctx, "sudo", "-n", "/bin/rm", "-rf", p); out.Err == nil {
+			if _, err := os.Lstat(p); err != nil {
+				return nil
+			}
+		}
 	}
-	return fmt.Errorf("path still present after rm -rf")
+	return fmt.Errorf("could not remove")
 }
 
 func pathSizeKB(p string) int64 {
