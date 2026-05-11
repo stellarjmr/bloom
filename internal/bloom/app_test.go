@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -127,6 +128,35 @@ func TestRunCheckOutputsTSV(t *testing.T) {
 	want := "brew\tstellarjmr/tool/bloom\ncask\titerm2\nnpm\tnpm\n"
 	if got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestProtectedAppPathSkipsSystemRootsAndSymlinkTargets(t *testing.T) {
+	if !isProtectedAppPath("/System/Library/CoreServices/Applications/Feedback Assistant.app") {
+		t.Fatal("system-root app was not protected")
+	}
+	if !isProtectedAppPath("/Applications/Utilities/Feedback Assistant.app") {
+		t.Fatal("Feedback Assistant was not protected by name")
+	}
+
+	link := filepath.Join(t.TempDir(), "Mole.app")
+	if err := os.Symlink("/System/Library/CoreServices/Applications/Feedback Assistant.app", link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if !isProtectedAppPath(link) {
+		t.Fatal("symlink to system app was not protected")
+	}
+}
+
+func TestProtectedAppPathAllowsUserInstalledAppleApps(t *testing.T) {
+	for _, path := range []string{
+		"/Applications/Xcode.app",
+		"/Applications/Final Cut Pro.app",
+		"/Applications/GarageBand.app",
+	} {
+		if isProtectedAppPath(path) {
+			t.Fatalf("%s should not be protected", path)
+		}
 	}
 }
 

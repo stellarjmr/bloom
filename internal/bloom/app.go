@@ -546,6 +546,11 @@ func (a *App) runUninstall(args []string) int {
 			failures++
 			continue
 		}
+		if isProtectedAppPath(entry.Path) {
+			fmt.Fprintf(a.Err, "✗ %s: protected system app\n", entry.Path)
+			failures++
+			continue
+		}
 		targets = append(targets, entry)
 	}
 

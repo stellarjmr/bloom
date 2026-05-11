@@ -197,11 +197,27 @@ func FormatLastUsed(epoch int64) string {
 
 // isProtectedAppPath skips Apple system bundles that should never be touched.
 func isProtectedAppPath(path string) bool {
-	lower := strings.ToLower(path)
-	if strings.HasPrefix(lower, "/system/") {
+	if appPathStringIsProtected(path) {
 		return true
 	}
-	base := strings.TrimSuffix(filepath.Base(path), ".app")
+	if target := symlinkTargetPath(path); target != "" && appPathStringIsProtected(target) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != "" && resolved != path && appPathStringIsProtected(resolved) {
+		return true
+	}
+	return false
+}
+
+func appPathStringIsProtected(path string) bool {
+	lower := strings.ToLower(filepath.Clean(path))
+	if lower == "/system" || strings.HasPrefix(lower, "/system/") {
+		return true
+	}
+	base := filepath.Base(path)
+	if strings.HasSuffix(strings.ToLower(base), ".app") {
+		base = base[:len(base)-len(".app")]
+	}
 	switch strings.ToLower(base) {
 	case "finder", "system preferences", "system settings", "safari",
 		"app store", "messages", "facetime", "mail", "contacts",
@@ -210,11 +226,26 @@ func isProtectedAppPath(path string) bool {
 		"home", "find my", "freeform", "shortcuts", "automator",
 		"image capture", "preview", "quicktime player", "textedit",
 		"calculator", "chess", "dictionary", "stickies", "weather",
-		"time machine", "migration assistant", "console", "activity monitor",
+		"time machine", "migration assistant", "feedback assistant", "console", "activity monitor",
 		"disk utility", "keychain access", "terminal":
 		return true
 	}
 	return false
+}
+
+func symlinkTargetPath(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return ""
+	}
+	target, err := os.Readlink(path)
+	if err != nil || target == "" {
+		return ""
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return filepath.Clean(target)
 }
 
 func readBundleID(appPath string) string {
