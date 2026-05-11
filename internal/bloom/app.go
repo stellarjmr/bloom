@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -51,6 +52,8 @@ func (a *App) Run(args []string) int {
 		return a.runCheck(args[1:])
 	case "update":
 		return a.runUpdate(args[1:])
+	case "uninstall":
+		return a.runUninstall(args[1:])
 	default:
 		fmt.Fprintf(a.Err, "unknown command: %s\n\n", args[0])
 		a.printHelp()
@@ -64,6 +67,7 @@ func (a *App) printHelp() {
 Usage:
   bm check [--format tree|tsv] [--config path]
   bm update [--dry-run] [--only task] [--skip task] [--package task:package] [--config path]
+  bm uninstall [--list] [--dry-run] [--app /path/to/App.app]...
   bm list [--config path]
   bm doctor [--config path]
   bm config
@@ -476,6 +480,113 @@ func (a *App) runUpdate(args []string) int {
 	progress.Finish()
 
 	printSummaryGroups(a.Out, summaryGroupsFromResults(results))
+
+	if failures > 0 {
+		return 1
+	}
+	return 0
+}
+
+func (a *App) runUninstall(args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	listOnly := fs.Bool("list", false, "list installed apps as TSV (path, name, bundleID, sizeKB)")
+	dryRun := fs.Bool("dry-run", false, "show what would be removed without deleting")
+	var apps multiFlag
+	fs.Var(&apps, "app", "uninstall this app path; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if *listOnly {
+		entries, err := ScanApplications(ctx)
+		if err != nil {
+			fmt.Fprintf(a.Err, "scan error: %v\n", err)
+			return 1
+		}
+		PrintAppList(a.Out, entries)
+		return 0
+	}
+
+	values := apps.Values()
+	if len(values) == 0 {
+		fmt.Fprintln(a.Err, "uninstall requires --list or --app /path/to/App.app")
+		return 2
+	}
+
+	known, err := ScanApplications(ctx)
+	if err != nil {
+		fmt.Fprintf(a.Err, "scan error: %v\n", err)
+		return 1
+	}
+	byPath := make(map[string]AppEntry, len(known))
+	for _, app := range known {
+		byPath[app.Path] = app
+	}
+
+	failures := 0
+	runner := newCachedRunner(a.Runner)
+
+	targets := make([]AppEntry, 0, len(values))
+	for _, path := range values {
+		entry, ok := byPath[path]
+		if !ok {
+			entry = AppEntry{
+				Path:     path,
+				Name:     filepath.Base(strings.TrimSuffix(strings.TrimRight(path, "/"), ".app")),
+				BundleID: readBundleID(path),
+				SizeKB:   directorySizeKB(path),
+			}
+		}
+		if _, err := os.Stat(entry.Path); err != nil {
+			fmt.Fprintf(a.Err, "✗ %s: not found\n", entry.Path)
+			failures++
+			continue
+		}
+		targets = append(targets, entry)
+	}
+
+	summary := BatchUninstall(ctx, runner, targets, *dryRun)
+	removedNames := []string{}
+	for _, res := range summary.Results {
+		if res.Err != nil {
+			fmt.Fprintf(a.Err, "✗ %s: %v\n", res.App.Name, res.Err)
+			failures++
+			continue
+		}
+		marker := "✓"
+		if *dryRun {
+			marker = "·"
+		}
+		brewNote := ""
+		if res.BrewRemoved {
+			brewNote = "  [brew cask]"
+		}
+		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
+		if *dryRun {
+			for _, p := range res.Files {
+				fmt.Fprintf(a.Out, "   · %s\n", p)
+			}
+		}
+		for _, p := range res.Failed {
+			fmt.Fprintf(a.Err, "   ! could not remove %s\n", p)
+		}
+		removedNames = append(removedNames, res.App.Name)
+	}
+
+	if len(removedNames) > 0 {
+		title := "Uninstalled"
+		if *dryRun {
+			title = "Would remove"
+		}
+		fmt.Fprintf(a.Out, "\n%s %d apps, freed %s\n", title, len(removedNames), FormatBytes(summary.TotalRemovedKB))
+		if summary.BrewAutoremove {
+			fmt.Fprintln(a.Out, "ran brew autoremove")
+		}
+	}
 
 	if failures > 0 {
 		return 1
