@@ -868,6 +868,27 @@ mason.setup({
 local a = require('mason-core.async')
 local registry = require('mason-registry')
 
+local function installed_package_names()
+  local install_root = vim.fn.stdpath('data') .. '/mason'
+  local ok_settings, settings = pcall(require, 'mason.settings')
+  if ok_settings and settings and settings.current and settings.current.install_root_dir then
+    install_root = settings.current.install_root_dir
+  end
+  local packages_dir = install_root .. '/packages'
+  if vim.fn.isdirectory(packages_dir) == 0 then
+    return {}
+  end
+  local entries = vim.fn.readdir(packages_dir)
+  table.sort(entries)
+  local names = {}
+  for _, name in ipairs(entries) do
+    if name ~= '.' and name ~= '..' then
+      table.insert(names, name)
+    end
+  end
+  return names
+end
+
 a.run_blocking(function()
   local ok, result = a.wait(registry.update)
   a.scheduler()
@@ -876,11 +897,16 @@ a.run_blocking(function()
   end
 
   local outdated = {}
-  for _, pkg in ipairs(registry.get_installed_packages()) do
-    local current_version = pkg:get_installed_version()
-    local latest_version = pkg:get_latest_version()
-    if current_version ~= latest_version and wants_package(pkg.name) then
-      table.insert(outdated, pkg)
+  for _, name in ipairs(installed_package_names()) do
+    if wants_package(name) then
+      local ok_pkg, pkg = pcall(registry.get_package, name)
+      if ok_pkg and pkg then
+        local current_version = pkg:get_installed_version()
+        local latest_version = pkg:get_latest_version()
+        if current_version ~= latest_version then
+          table.insert(outdated, pkg)
+        end
+      end
     end
   end
 
@@ -941,6 +967,27 @@ mason.setup({})
 local a = require('mason-core.async')
 local registry = require('mason-registry')
 
+local function installed_package_names()
+  local install_root = vim.fn.stdpath('data') .. '/mason'
+  local ok_settings, settings = pcall(require, 'mason.settings')
+  if ok_settings and settings and settings.current and settings.current.install_root_dir then
+    install_root = settings.current.install_root_dir
+  end
+  local packages_dir = install_root .. '/packages'
+  if vim.fn.isdirectory(packages_dir) == 0 then
+    return {}
+  end
+  local entries = vim.fn.readdir(packages_dir)
+  table.sort(entries)
+  local names = {}
+  for _, name in ipairs(entries) do
+    if name ~= '.' and name ~= '..' then
+      table.insert(names, name)
+    end
+  end
+  return names
+end
+
 a.run_blocking(function()
   local ok, result = a.wait(registry.update)
   a.scheduler()
@@ -948,11 +995,16 @@ a.run_blocking(function()
     error(('Failed to update Mason registries: %s'):format(vim.inspect(result)))
   end
 
-  for _, pkg in ipairs(registry.get_installed_packages()) do
-    local current_version = pkg:get_installed_version()
-    local latest_version = pkg:get_latest_version()
-    if current_version ~= latest_version and wants_package(pkg.name) then
-      vim.api.nvim_out_write(('MASON_OUTDATED:%s\n'):format(pkg.name))
+  for _, name in ipairs(installed_package_names()) do
+    if wants_package(name) then
+      local ok_pkg, pkg = pcall(registry.get_package, name)
+      if ok_pkg and pkg then
+        local current_version = pkg:get_installed_version()
+        local latest_version = pkg:get_latest_version()
+        if current_version ~= latest_version then
+          vim.api.nvim_out_write(('MASON_OUTDATED:%s\n'):format(pkg.name))
+        end
+      end
     end
   end
 end)
