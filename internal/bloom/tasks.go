@@ -815,6 +815,46 @@ func luaStringArray(values []string) string {
 	return "{ " + strings.Join(quoted, ", ") + " }"
 }
 
+// masonLocateLua returns Lua that locates mason.nvim on disk and prepends
+// it (and its registry plugin if present) to the runtimepath. This lets
+// our headless invocations require('mason') successfully regardless of
+// whether the user's init.lua loads it (LazyVim, vim.pack opt, vim.pack
+// start, or a custom pack group all work).
+func masonLocateLua() string {
+	return `
+local function _bloom_mason_locate(name)
+  local data = vim.fn.stdpath('data')
+  local candidates = {
+    data .. '/lazy/' .. name,
+    data .. '/site/pack/core/start/' .. name,
+    data .. '/site/pack/core/opt/' .. name,
+  }
+  for _, p in ipairs(candidates) do
+    if vim.fn.isdirectory(p) == 1 then return p end
+  end
+  for _, p in ipairs(vim.fn.glob(data .. '/site/pack/*/start/' .. name, true, true)) do
+    if vim.fn.isdirectory(p) == 1 then return p end
+  end
+  for _, p in ipairs(vim.fn.glob(data .. '/site/pack/*/opt/' .. name, true, true)) do
+    if vim.fn.isdirectory(p) == 1 then return p end
+  end
+  return nil
+end
+
+for _, name in ipairs({ 'mason.nvim', 'mason-registry' }) do
+  local path = _bloom_mason_locate(name)
+  if path then
+    vim.opt.rtp:prepend(path)
+  end
+end
+
+local ok_lazy, lazy = pcall(require, 'lazy')
+if ok_lazy then
+  pcall(lazy.load, { plugins = { 'mason.nvim' } })
+end
+`
+}
+
 func masonLua(include, exclude []string) string {
 	lua := `
 local pip_args = {}
@@ -839,11 +879,6 @@ local function wants_package(name)
     return false
   end
   return not exclude_set[name]
-end
-
-local ok_lazy, lazy = pcall(require, 'lazy')
-if ok_lazy then
-  lazy.load({ plugins = { 'mason.nvim' } })
 end
 
 local ok_mason, mason = pcall(require, 'mason')
@@ -976,6 +1011,7 @@ a.run_blocking(function()
   end
 end)
 `
+	lua = masonLocateLua() + lua
 	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
 	lua = strings.ReplaceAll(lua, "__BLOOM_EXCLUDE__", luaStringArray(exclude))
 	return lua
@@ -999,11 +1035,6 @@ local function wants_package(name)
     return false
   end
   return not exclude_set[name]
-end
-
-local ok_lazy, lazy = pcall(require, 'lazy')
-if ok_lazy then
-  lazy.load({ plugins = { 'mason.nvim' } })
 end
 
 local ok_mason, mason = pcall(require, 'mason')
@@ -1104,6 +1135,7 @@ a.run_blocking(function()
   end
 end)
 `
+	lua = masonLocateLua() + lua
 	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
 	lua = strings.ReplaceAll(lua, "__BLOOM_EXCLUDE__", luaStringArray(exclude))
 	return lua

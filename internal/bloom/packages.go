@@ -82,11 +82,7 @@ func loadNeovimPackages() map[string]string {
 }
 
 func masonListLua() string {
-	return `
-local ok_lazy, lazy = pcall(require, 'lazy')
-if ok_lazy then
-  pcall(lazy.load, { plugins = { 'mason.nvim' } })
-end
+	return masonLocateLua() + `
 
 local install_root = vim.fn.stdpath('data') .. '/mason'
 
