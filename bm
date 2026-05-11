@@ -177,14 +177,15 @@ draw_menu() {
   show_brand_banner
   blank_line
   menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "Check        Choose available updates" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "List         Show configured tasks" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "Doctor       Check missing tools" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Config       Manage tasks and packages" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "Init Config  Create default config" "$([[ $selected -eq 6 ]] && echo true || echo false)"
-  menu_option 7 "Help         Show commands" "$([[ $selected -eq 7 ]] && echo true || echo false)"
+  menu_option 2 "Uninstall    Remove apps completely" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "Check        Choose available updates" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "List         Show configured tasks" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "Doctor       Check missing tools" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Config       Manage tasks and packages" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 7 "Init Config  Create default config" "$([[ $selected -eq 7 ]] && echo true || echo false)"
+  menu_option 8 "Help         Show commands" "$([[ $selected -eq 8 ]] && echo true || echo false)"
   blank_line
-  printf '%b↑↓/jk | Enter | 1-7 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  printf '%b↑↓/jk | Enter | 1-8 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
   blank_line
   end_draw
 }
@@ -198,6 +199,8 @@ show_help() {
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --dry-run" "$NC" "Preview update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --only nvim" "$NC" "Run one task"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --package npm:pkg" "$NC" "Run one package from a task"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall" "$NC" "Remove apps and their leftovers"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall --list" "$NC" "List installable apps as TSV"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm list" "$NC" "List configured tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm doctor" "$NC" "Check missing tools"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm config" "$NC" "Manage tasks and packages"
@@ -214,21 +217,22 @@ run_menu_selection() {
     core update
     exit $?
     ;;
-  2) run_check_menu ;;
-  3)
+  2) run_uninstall_menu ;;
+  3) run_check_menu ;;
+  4)
     leave_menu_screen
     exec "$0" list
     ;;
-  4)
+  5)
     leave_menu_screen
     exec "$0" doctor
     ;;
-  5) interactive_config_menu ;;
-  6)
+  6) interactive_config_menu ;;
+  7)
     leave_menu_screen
     exec "$0" config init
     ;;
-  7)
+  8)
     leave_menu_screen
     show_help
     exit 0
@@ -260,7 +264,7 @@ interactive_menu() {
       fi
       ;;
     "DOWN")
-      if ((selected < 7)); then
+      if ((selected < 8)); then
         selected=$((selected + 1))
         dirty=true
       fi
@@ -628,6 +632,115 @@ run_check_menu() {
   return 0
 }
 
+format_kb() {
+  local kb="$1"
+  [[ "$kb" =~ ^[0-9]+$ ]] || { printf '%s' "?"; return; }
+  if ((kb >= 1024 * 1024)); then
+    awk -v k="$kb" 'BEGIN{printf "%.1fG", k/1024/1024}'
+  elif ((kb >= 1024)); then
+    awk -v k="$kb" 'BEGIN{printf "%.1fM", k/1024}'
+  else
+    printf '%dK' "$kb"
+  fi
+}
+
+format_last_used() {
+  local epoch="$1"
+  [[ "$epoch" =~ ^[0-9]+$ ]] || { printf 'Unknown'; return; }
+  if ((epoch <= 0)); then
+    printf 'Unknown'
+    return
+  fi
+  local now days
+  now="$(date +%s)"
+  days=$(( (now - epoch) / 86400 ))
+  ((days < 0)) && days=0
+  if ((days == 0)); then
+    printf 'Today'
+  elif ((days == 1)); then
+    printf 'Yesterday'
+  elif ((days < 7)); then
+    printf '%dd ago' "$days"
+  elif ((days < 30)); then
+    local w=$((days / 7))
+    if ((w == 1)); then printf '1w ago'; else printf '%dw ago' "$w"; fi
+  elif ((days < 365)); then
+    local m=$((days / 30))
+    if ((m == 1)); then printf '1mo ago'; else printf '%dmo ago' "$m"; fi
+  else
+    local y=$((days / 365))
+    if ((y == 1)); then printf '1y ago'; else printf '%dy ago' "$y"; fi
+  fi
+}
+
+run_uninstall_menu() {
+  clear_for_command
+  printf '%bScanning installed apps...%b\n' "$BLUE" "$NC"
+
+  local output status
+  set +e
+  output="$(core uninstall --list 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '\n%bScan failed:%b\n%s\n\n' "$RED" "$NC" "$output"
+    printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    return 0
+  fi
+
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local path name bundle size_kb last_epoch size_disp last_disp label
+  while IFS=$'\t' read -r path name bundle size_kb last_epoch; do
+    [[ -z "$path" || -z "$name" ]] && continue
+    size_disp="$(format_kb "${size_kb:-0}")"
+    last_disp="$(format_last_used "${last_epoch:-0}")"
+    label="$(printf '%-32s  %7s  Last: %-12s' "$name" "$size_disp" "$last_disp")"
+    MS_VALUES+=("$path")
+    MS_LABELS+=("$label")
+    MS_SELECTED+=("false")
+  done <<<"$output"
+
+  if [[ "${#MS_VALUES[@]}" -eq 0 ]]; then
+    printf '\n%bNo applications found%b\n\n' "$GREEN" "$NC"
+    printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    return 0
+  fi
+
+  if ! check_select_updates "Uninstall Apps"; then
+    return 0
+  fi
+  if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  clear_for_command
+  printf '%bUninstall %d app(s)?%b\n\n' "$BLUE" "${#MS_RESULT_VALUES[@]}" "$NC"
+  local item base
+  for item in "${MS_RESULT_VALUES[@]}"; do
+    base="$(basename "$item" .app)"
+    printf '  · %s\n' "$base"
+  done
+  printf '\n%bEnter%b Confirm | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
+  local key
+  key="$(read_key)"
+  if [[ "$key" != "ENTER" ]]; then
+    return 0
+  fi
+
+  clear_for_command
+  local -a args=(uninstall)
+  for item in "${MS_RESULT_VALUES[@]}"; do
+    args+=(--app "$item")
+  done
+  leave_menu_screen
+  core "${args[@]}"
+  exit $?
+}
+
 draw_config_menu() {
   local selected="$1"
   begin_draw
@@ -829,7 +942,7 @@ case "${1:-}" in
     core "$@"
   fi
   ;;
-"update" | "check" | "list" | "doctor")
+"update" | "check" | "list" | "doctor" | "uninstall")
   core "$@"
   ;;
 *)
