@@ -85,34 +85,35 @@ func masonListLua() string {
 	return `
 local ok_lazy, lazy = pcall(require, 'lazy')
 if ok_lazy then
-  lazy.load({ plugins = { 'mason.nvim' } })
+  pcall(lazy.load, { plugins = { 'mason.nvim' } })
 end
 
-local ok_mason, mason = pcall(require, 'mason')
-if not ok_mason then
-  vim.api.nvim_out_write('MASON_MISSING\n')
-  return
-end
+local install_root = vim.fn.stdpath('data') .. '/mason'
 
-mason.setup({})
-
-local ok_async, a = pcall(require, 'mason-core.async')
-local registry = require('mason-registry')
-
-local function emit_packages()
-  for _, pkg in ipairs(registry.get_installed_packages()) do
-    vim.api.nvim_out_write(('MASON_PACKAGE:%s\n'):format(pkg.name))
+local ok_settings, settings = pcall(require, 'mason.settings')
+if ok_settings and settings and settings.current and settings.current.install_root_dir then
+  install_root = settings.current.install_root_dir
+else
+  local ok_mason, mason = pcall(require, 'mason')
+  if ok_mason then
+    pcall(mason.setup, {})
+    if settings and settings.current and settings.current.install_root_dir then
+      install_root = settings.current.install_root_dir
+    end
   end
 end
 
-if ok_async and type(registry.refresh) == 'function' then
-  a.run_blocking(function()
-    a.wait(registry.refresh)
-    a.scheduler()
-    emit_packages()
-  end)
-else
-  emit_packages()
+local packages_dir = install_root .. '/packages'
+if vim.fn.isdirectory(packages_dir) == 0 then
+  return
+end
+
+local entries = vim.fn.readdir(packages_dir)
+table.sort(entries)
+for _, name in ipairs(entries) do
+  if name ~= '.' and name ~= '..' then
+    vim.api.nvim_out_write(('MASON_PACKAGE:%s\n'):format(name))
+  end
 end
 `
 }
