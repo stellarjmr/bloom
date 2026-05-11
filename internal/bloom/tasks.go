@@ -483,15 +483,20 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return failed(out)
 	}
 	var summary []string
+	var diagnostics []string
 	for _, line := range nonEmptyLines(out.Combined()) {
-		if strings.HasPrefix(line, "MASON_UPDATED:") {
+		switch {
+		case strings.HasPrefix(line, "MASON_UPDATED:"):
 			summary = append(summary, strings.TrimPrefix(line, "MASON_UPDATED:"))
+		case strings.HasPrefix(line, "MASON_DIAG:"):
+			diagnostics = append(diagnostics, strings.TrimPrefix(line, "MASON_DIAG:"))
 		}
 	}
+	output := strings.Join(diagnostics, "\n")
 	if len(summary) == 0 {
-		return TaskResult{Status: StatusOK}
+		return TaskResult{Status: StatusOK, Output: output}
 	}
-	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary}
+	return TaskResult{Status: StatusOK, Message: fmt.Sprintf("%d changed", len(summary)), Summary: summary, Output: output}
 }
 
 func failed(out CommandOutput) TaskResult {
@@ -889,25 +894,70 @@ local function installed_package_names()
   return names
 end
 
+local function reload_sources()
+  if not registry.sources or not registry.sources.iterate then
+    return
+  end
+  for source in registry.sources:iterate({ include_uninstalled = true }) do
+    if source and type(source.reload) == 'function' then
+      pcall(source.reload, source)
+    end
+  end
+end
+
+local function find_package(name)
+  if registry.sources and registry.sources.iterate then
+    for source in registry.sources:iterate({ include_uninstalled = true }) do
+      if source and type(source.get_package) == 'function' then
+        local ok_pkg, pkg = pcall(source.get_package, source, name)
+        if ok_pkg and pkg then
+          local id = pkg.spec and pkg.spec.source and pkg.spec.source.id or ''
+          if not id:match('^pkg:mason/') then
+            return pkg
+          end
+        end
+      end
+    end
+  end
+  local ok_pkg, pkg = pcall(registry.get_package, name)
+  if ok_pkg and pkg then
+    local id = pkg.spec and pkg.spec.source and pkg.spec.source.id or ''
+    if not id:match('^pkg:mason/') then
+      return pkg
+    end
+  end
+  return nil
+end
+
 a.run_blocking(function()
   local ok, result = a.wait(registry.update)
   a.scheduler()
   if not ok then
     error(('Failed to update Mason registries: %s'):format(vim.inspect(result)))
   end
+  reload_sources()
+  a.scheduler()
 
   local outdated = {}
+  local skipped = {}
   for _, name in ipairs(installed_package_names()) do
     if wants_package(name) then
-      local ok_pkg, pkg = pcall(registry.get_package, name)
-      if ok_pkg and pkg then
+      local pkg = find_package(name)
+      if pkg then
         local current_version = pkg:get_installed_version()
         local latest_version = pkg:get_latest_version()
         if current_version ~= latest_version then
           table.insert(outdated, pkg)
         end
+      else
+        table.insert(skipped, name)
       end
     end
+  end
+
+  if #skipped > 0 then
+    vim.api.nvim_out_write(('MASON_DIAG:registry source not loaded; %d package(s) could not be resolved: %s\n'):format(
+      #skipped, table.concat(skipped, ', ')))
   end
 
   if #outdated == 0 then
@@ -988,24 +1038,69 @@ local function installed_package_names()
   return names
 end
 
+local function reload_sources()
+  if not registry.sources or not registry.sources.iterate then
+    return
+  end
+  for source in registry.sources:iterate({ include_uninstalled = true }) do
+    if source and type(source.reload) == 'function' then
+      pcall(source.reload, source)
+    end
+  end
+end
+
+local function find_package(name)
+  if registry.sources and registry.sources.iterate then
+    for source in registry.sources:iterate({ include_uninstalled = true }) do
+      if source and type(source.get_package) == 'function' then
+        local ok_pkg, pkg = pcall(source.get_package, source, name)
+        if ok_pkg and pkg then
+          local id = pkg.spec and pkg.spec.source and pkg.spec.source.id or ''
+          if not id:match('^pkg:mason/') then
+            return pkg
+          end
+        end
+      end
+    end
+  end
+  local ok_pkg, pkg = pcall(registry.get_package, name)
+  if ok_pkg and pkg then
+    local id = pkg.spec and pkg.spec.source and pkg.spec.source.id or ''
+    if not id:match('^pkg:mason/') then
+      return pkg
+    end
+  end
+  return nil
+end
+
 a.run_blocking(function()
   local ok, result = a.wait(registry.update)
   a.scheduler()
   if not ok then
     error(('Failed to update Mason registries: %s'):format(vim.inspect(result)))
   end
+  reload_sources()
+  a.scheduler()
 
+  local skipped = {}
   for _, name in ipairs(installed_package_names()) do
     if wants_package(name) then
-      local ok_pkg, pkg = pcall(registry.get_package, name)
-      if ok_pkg and pkg then
+      local pkg = find_package(name)
+      if pkg then
         local current_version = pkg:get_installed_version()
         local latest_version = pkg:get_latest_version()
         if current_version ~= latest_version then
           vim.api.nvim_out_write(('MASON_OUTDATED:%s\n'):format(pkg.name))
         end
+      else
+        table.insert(skipped, name)
       end
     end
+  end
+
+  if #skipped > 0 then
+    vim.api.nvim_out_write(('MASON_DIAG:registry source not loaded; %d package(s) could not be resolved: %s\n'):format(
+      #skipped, table.concat(skipped, ', ')))
   end
 end)
 `
