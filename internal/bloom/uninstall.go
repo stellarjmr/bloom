@@ -818,10 +818,54 @@ func FormatBytes(kb int64) string {
 }
 
 // PrintAppList writes a TSV listing of installed apps:
-// path, name, bundleID, sizeKB, lastUsedEpoch.
+// path, name, bundleID, sizeKB, lastUsedEpoch, nameDisplayWidth.
+// nameDisplayWidth is the rendered width (CJK/fullwidth = 2) so callers
+// can pad in monospaced terminals without miscounting bytes vs columns.
 func PrintAppList(out io.Writer, apps []AppEntry) {
 	for _, app := range apps {
-		fmt.Fprintf(out, "%s\t%s\t%s\t%d\t%d\n",
-			app.Path, app.Name, app.BundleID, app.SizeKB, app.LastUsedEpoch)
+		fmt.Fprintf(out, "%s\t%s\t%s\t%d\t%d\t%d\n",
+			app.Path, app.Name, app.BundleID, app.SizeKB, app.LastUsedEpoch,
+			DisplayWidth(app.Name))
 	}
+}
+
+// DisplayWidth returns the rendered width of s in monospaced cells.
+// CJK ideographs, Hangul, Hiragana/Katakana, fullwidth Latin, and most
+// emoji are counted as width 2. ASCII control characters are skipped.
+func DisplayWidth(s string) int {
+	width := 0
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		if isWideRune(r) {
+			width += 2
+		} else {
+			width++
+		}
+	}
+	return width
+}
+
+// isWideRune reports whether r occupies two columns when rendered in a
+// typical monospaced terminal. Ranges follow Unicode East Asian Width.
+func isWideRune(r rune) bool {
+	switch {
+	case r >= 0x1100 && r <= 0x115F, // Hangul Jamo
+		r >= 0x2E80 && r <= 0x303E, // CJK Radicals, Kangxi
+		r >= 0x3041 && r <= 0x33FF, // Hiragana / Katakana / CJK Symbols
+		r >= 0x3400 && r <= 0x4DBF, // CJK Ext A
+		r >= 0x4E00 && r <= 0x9FFF, // CJK Unified
+		r >= 0xA000 && r <= 0xA4CF, // Yi Syllables
+		r >= 0xAC00 && r <= 0xD7A3, // Hangul Syllables
+		r >= 0xF900 && r <= 0xFAFF, // CJK Compatibility Ideographs
+		r >= 0xFE30 && r <= 0xFE4F, // CJK Compatibility Forms
+		r >= 0xFF00 && r <= 0xFF60, // Fullwidth Forms
+		r >= 0xFFE0 && r <= 0xFFE6, // Fullwidth Signs
+		r >= 0x1F300 && r <= 0x1FAFF, // Emoji + Pictographs
+		r >= 0x20000 && r <= 0x2FFFD, // CJK Ext B-F
+		r >= 0x30000 && r <= 0x3FFFD: // CJK Ext G
+		return true
+	}
+	return false
 }

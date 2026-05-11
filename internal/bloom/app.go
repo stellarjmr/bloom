@@ -566,10 +566,12 @@ func (a *App) runUninstall(args []string) int {
 			brewNote = "  [brew cask]"
 		}
 		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
+		fileMark := "✓"
 		if *dryRun {
-			for _, p := range res.Files {
-				fmt.Fprintf(a.Out, "   · %s\n", p)
-			}
+			fileMark = "·"
+		}
+		for _, p := range res.Files {
+			fmt.Fprintf(a.Out, "   %s %s\n", fileMark, p)
 		}
 		for _, p := range res.Failed {
 			fmt.Fprintf(a.Err, "   ! could not remove %s\n", p)

@@ -692,12 +692,19 @@ run_uninstall_menu() {
   MS_VALUES=()
   MS_LABELS=()
   MS_SELECTED=()
-  local path name bundle size_kb last_epoch size_disp last_disp label
-  while IFS=$'\t' read -r path name bundle size_kb last_epoch; do
+  local path name bundle size_kb last_epoch name_width size_disp last_disp pad label
+  local target_width=32
+  while IFS=$'\t' read -r path name bundle size_kb last_epoch name_width; do
     [[ -z "$path" || -z "$name" ]] && continue
     size_disp="$(format_kb "${size_kb:-0}")"
     last_disp="$(format_last_used "${last_epoch:-0}")"
-    label="$(printf '%-32s  %7s  Last: %-12s' "$name" "$size_disp" "$last_disp")"
+    [[ "$name_width" =~ ^[0-9]+$ ]] || name_width=${#name}
+    if (( name_width >= target_width )); then
+      pad=""
+    else
+      printf -v pad '%*s' $((target_width - name_width)) ''
+    fi
+    label="$(printf '%s%s  %7s  Last: %-12s' "$name" "$pad" "$size_disp" "$last_disp")"
     MS_VALUES+=("$path")
     MS_LABELS+=("$label")
     MS_SELECTED+=("false")
