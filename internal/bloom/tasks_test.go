@@ -336,6 +336,37 @@ func TestRunYaziUsesOfficialPackageUpdateCommand(t *testing.T) {
 	}
 }
 
+func TestRemovePackagesUsesOfficialPackageManagerCommands(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true, "ya": true, "npm": true},
+		outputs: map[string]CommandOutput{
+			"brew uninstall ripgrep":       {},
+			"ya pkg delete foo/bar":        {},
+			"npm uninstall -g @scope/tool": {},
+		},
+	}
+	refs := []PackageRef{
+		{Task: "brew", Name: "ripgrep"},
+		{Task: "yazi", Name: "foo/bar"},
+		{Task: "npm", Name: "@scope/tool"},
+	}
+
+	results := RemovePackages(context.Background(), r, refs, false)
+	for _, res := range results {
+		if res.Err != nil {
+			t.Fatalf("%s:%s failed: %v", res.Package.Task, res.Package.Name, res.Err)
+		}
+	}
+	want := []string{
+		"brew uninstall ripgrep",
+		"ya pkg delete foo/bar",
+		"npm uninstall -g @scope/tool",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
 func TestRunNPMUsesOfficialGlobalUpdateCommand(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"npm": true},

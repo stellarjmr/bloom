@@ -268,6 +268,23 @@ func readBundleID(appPath string) string {
 	return id
 }
 
+func readBundleExecutable(appPath string) string {
+	plist := filepath.Join(appPath, "Contents", "Info.plist")
+	if _, err := os.Stat(plist); err != nil {
+		return ""
+	}
+	cmd := exec.Command("/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", plist)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "(null)" {
+		return ""
+	}
+	return name
+}
+
 func looksLikeBundleID(id string) bool {
 	if !strings.Contains(id, ".") {
 		return false
@@ -343,6 +360,8 @@ func FindRelatedPaths(app AppEntry) []string {
 			matchInDir(root, tok, &paths)
 		}
 	}
+	matchGroupContainers(app, &paths)
+	matchDiagnosticReports(app, &paths)
 
 	// Preferences: <bundleID>.plist + ByHost variants
 	prefDir := filepath.Join(home, "Library", "Preferences")
@@ -400,6 +419,163 @@ func matchInDir(dir, token string, out *[]string) {
 			*out = append(*out, filepath.Join(dir, name))
 		}
 	}
+}
+
+func matchGroupContainers(app AppEntry, out *[]string) {
+	if app.BundleID == "" {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+	dir := filepath.Join(home, "Library", "Group Containers")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	domainPrefix := bundleDomainPrefix(app.BundleID)
+	if domainPrefix == "" {
+		return
+	}
+	teamID := readTeamID(app.Path)
+	allowDomainFallback := app.Path == ""
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "." || name == ".." {
+			continue
+		}
+		if groupContainerMatches(name, teamID, domainPrefix, allowDomainFallback) {
+			*out = append(*out, filepath.Join(dir, name))
+		}
+	}
+}
+
+func bundleDomainPrefix(bundleID string) string {
+	if !looksLikeBundleID(bundleID) {
+		return ""
+	}
+	prefix := bundleID
+	if idx := strings.LastIndex(prefix, "."); idx >= 0 {
+		prefix = prefix[:idx]
+	}
+	if !strings.Contains(prefix, ".") || len(prefix) < 5 {
+		return ""
+	}
+	return prefix
+}
+
+func groupContainerMatches(name, teamID, domainPrefix string, allowDomainFallback bool) bool {
+	if domainPrefix == "" {
+		return false
+	}
+	if teamID != "" {
+		if strings.HasPrefix(name, teamID+"."+domainPrefix) || strings.HasPrefix(name, teamID+".group."+domainPrefix) {
+			return true
+		}
+		if rest := strings.TrimPrefix(name, teamID+"."); rest != name && strings.Contains(rest, "."+domainPrefix) {
+			return true
+		}
+		return false
+	}
+	if !allowDomainFallback {
+		return false
+	}
+	return strings.HasSuffix(name, "."+domainPrefix) || strings.HasSuffix(name, ".group."+domainPrefix)
+}
+
+func readTeamID(appPath string) string {
+	if appPath == "" {
+		return ""
+	}
+	cmd := exec.Command("/usr/bin/codesign", "-dv", appPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil && len(out) == 0 {
+		return ""
+	}
+	for _, field := range strings.Fields(string(out)) {
+		value, ok := strings.CutPrefix(field, "TeamIdentifier=")
+		if !ok || !looksLikeTeamID(value) {
+			continue
+		}
+		return value
+	}
+	return ""
+}
+
+func looksLikeTeamID(value string) bool {
+	if len(value) < 5 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func matchDiagnosticReports(app AppEntry, out *[]string) {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+	dir := filepath.Join(home, "Library", "Logs", "DiagnosticReports")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefixes := diagnosticReportPrefixes(app)
+	if len(prefixes) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !diagnosticReportNameMatches(name, prefixes) {
+			continue
+		}
+		*out = append(*out, filepath.Join(dir, name))
+	}
+}
+
+func diagnosticReportPrefixes(app AppEntry) []string {
+	values := []string{
+		readBundleExecutable(app.Path),
+		strings.ReplaceAll(app.Name, " ", ""),
+	}
+	prefixes := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) < 2 {
+			continue
+		}
+		value = strings.ToLower(value)
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		prefixes = append(prefixes, value)
+	}
+	return prefixes
+}
+
+func diagnosticReportNameMatches(name string, prefixes []string) bool {
+	lower := strings.ToLower(name)
+	switch filepath.Ext(lower) {
+	case ".ips", ".crash", ".spin", ".diag":
+	default:
+		return false
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix+".") || strings.HasPrefix(lower, prefix+"_") || strings.HasPrefix(lower, prefix+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // UninstallApp removes the bundle and all related files for one app.
@@ -990,16 +1166,16 @@ func DisplayWidth(s string) int {
 func isWideRune(r rune) bool {
 	switch {
 	case r >= 0x1100 && r <= 0x115F, // Hangul Jamo
-		r >= 0x2E80 && r <= 0x303E, // CJK Radicals, Kangxi
-		r >= 0x3041 && r <= 0x33FF, // Hiragana / Katakana / CJK Symbols
-		r >= 0x3400 && r <= 0x4DBF, // CJK Ext A
-		r >= 0x4E00 && r <= 0x9FFF, // CJK Unified
-		r >= 0xA000 && r <= 0xA4CF, // Yi Syllables
-		r >= 0xAC00 && r <= 0xD7A3, // Hangul Syllables
-		r >= 0xF900 && r <= 0xFAFF, // CJK Compatibility Ideographs
-		r >= 0xFE30 && r <= 0xFE4F, // CJK Compatibility Forms
-		r >= 0xFF00 && r <= 0xFF60, // Fullwidth Forms
-		r >= 0xFFE0 && r <= 0xFFE6, // Fullwidth Signs
+		r >= 0x2E80 && r <= 0x303E,   // CJK Radicals, Kangxi
+		r >= 0x3041 && r <= 0x33FF,   // Hiragana / Katakana / CJK Symbols
+		r >= 0x3400 && r <= 0x4DBF,   // CJK Ext A
+		r >= 0x4E00 && r <= 0x9FFF,   // CJK Unified
+		r >= 0xA000 && r <= 0xA4CF,   // Yi Syllables
+		r >= 0xAC00 && r <= 0xD7A3,   // Hangul Syllables
+		r >= 0xF900 && r <= 0xFAFF,   // CJK Compatibility Ideographs
+		r >= 0xFE30 && r <= 0xFE4F,   // CJK Compatibility Forms
+		r >= 0xFF00 && r <= 0xFF60,   // Fullwidth Forms
+		r >= 0xFFE0 && r <= 0xFFE6,   // Fullwidth Signs
 		r >= 0x1F300 && r <= 0x1FAFF, // Emoji + Pictographs
 		r >= 0x20000 && r <= 0x2FFFD, // CJK Ext B-F
 		r >= 0x30000 && r <= 0x3FFFD: // CJK Ext G

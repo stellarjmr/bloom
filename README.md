@@ -27,6 +27,9 @@ bm update --dry-run          # inspect selected tasks without updating
 bm update --only nvim        # run one task
 bm update --package npm:pkg  # run one package from a task
 bm update --skip npm         # skip a task
+bm remove                    # remove packages with their package manager
+bm remove --list             # list removable packages as TSV
+bm remove --package npm:pkg  # remove one package from a task
 bm uninstall                 # remove apps and their leftovers
 bm uninstall --list          # list installed apps as TSV
 bm uninstall --dry-run --app /Applications/Foo.app
@@ -53,11 +56,19 @@ The default task set updates everything Bloom can detect:
 
 Missing tools are skipped during `bm update` and are not counted in the progress total. For Homebrew updates, Bloom refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
 
+## Remove packages
+
+`bm remove` removes packages using the owning package manager only. It does not delete package files directly and does not remove macOS app leftovers.
+
+The interactive Remove flow lives above Uninstall in the main menu. It lists removable package sets from Config → Packages, then calls official removal APIs/commands such as `brew uninstall`, `ya pkg delete`, `npm uninstall -g`, and Mason's package uninstall API.
+
+Homebrew casks and other `.app` bundles are handled by `bm uninstall`, which includes application leftovers. Neovim plugin install/removal is config-driven, so remove plugins from your Neovim configuration instead of using `bm remove`.
+
 ## Uninstall
 
 `bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies).
 
-The interactive flow lives at menu item 2:
+The interactive flow lives at menu item 3:
 
 - All apps start unselected. `Space` toggles. `Enter` removes the cursor item when nothing is selected, or every selected item otherwise.
 - Each row shows the app name, on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.

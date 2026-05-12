@@ -177,12 +177,12 @@ draw_menu() {
   show_brand_banner
   blank_line
   menu_option 1 "Update       Run configured updater" "$([[ $selected -eq 1 ]] && echo true || echo false)"
-  menu_option 2 "Uninstall    Remove apps completely" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "Check        Choose available updates" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "List         Show configured tasks" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Doctor       Check missing tools" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "Config       Manage tasks and packages" "$([[ $selected -eq 6 ]] && echo true || echo false)"
-  menu_option 7 "Init Config  Create default config" "$([[ $selected -eq 7 ]] && echo true || echo false)"
+  menu_option 2 "Remove       Remove packages" "$([[ $selected -eq 2 ]] && echo true || echo false)"
+  menu_option 3 "Uninstall    Remove apps completely" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "Check        Choose available updates" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "List         Show configured tasks" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Doctor       Check missing tools" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 7 "Config       Manage tasks and packages" "$([[ $selected -eq 7 ]] && echo true || echo false)"
   menu_option 8 "Help         Show commands" "$([[ $selected -eq 8 ]] && echo true || echo false)"
   blank_line
   printf '%b↑↓/jk | Enter | 1-8 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
@@ -199,6 +199,9 @@ show_help() {
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --dry-run" "$NC" "Preview update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --only nvim" "$NC" "Run one task"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --package npm:pkg" "$NC" "Run one package from a task"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm remove" "$NC" "Remove packages with package managers"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm remove --list" "$NC" "List removable packages as TSV"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm remove --package npm:pkg" "$NC" "Remove one package from a task"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall" "$NC" "Remove apps and their leftovers"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall --list" "$NC" "List installable apps as TSV"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm list" "$NC" "List configured tasks"
@@ -217,21 +220,18 @@ run_menu_selection() {
     core update
     exit $?
     ;;
-  2) run_uninstall_menu ;;
-  3) run_check_menu ;;
-  4)
+  2) run_remove_menu ;;
+  3) run_uninstall_menu ;;
+  4) run_check_menu ;;
+  5)
     leave_menu_screen
     exec "$0" list
     ;;
-  5)
+  6)
     leave_menu_screen
     exec "$0" doctor
     ;;
-  6) interactive_config_menu ;;
-  7)
-    leave_menu_screen
-    exec "$0" config init
-    ;;
+  7) interactive_config_menu ;;
   8)
     leave_menu_screen
     show_help
@@ -435,6 +435,7 @@ multi_select() {
 
 check_select_updates() {
   local title="$1"
+  local action="${2:-Update}"
   local total="${#MS_VALUES[@]}"
   MS_RESULT_VALUES=()
   [[ "$total" -eq 0 ]] && return 1
@@ -479,7 +480,7 @@ check_select_updates() {
         fi
       done
       blank_line
-      printf '%b↑↓/jk | Space Select | Enter Update | Q Back%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+      printf '%b↑↓/jk | Space Select | Enter %s | Q Back%b%s\n' "$GRAY" "$action" "$NC" "$CLEAR_EOL"
       end_draw
       dirty=false
     fi
@@ -583,6 +584,70 @@ select_one() {
     esac
     drain_pending_input
   done
+}
+
+run_remove_menu() {
+  clear_for_command
+  printf '%bScanning removable packages...%b\n' "$BLUE" "$NC"
+
+  local output status
+  set +e
+  output="$(core remove --list 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '\n%bScan failed:%b\n%s\n\n' "$RED" "$NC" "$output"
+    printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    return 0
+  fi
+
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local task package
+  while IFS=$'\t' read -r task package; do
+    [[ -z "$task" || -z "$package" ]] && continue
+    MS_VALUES+=("${task}:${package}")
+    MS_LABELS+=("${task}  ${package}")
+    MS_SELECTED+=("false")
+  done <<<"$output"
+
+  if [[ "${#MS_VALUES[@]}" -eq 0 ]]; then
+    printf '\n%bNo removable packages found%b\n\n' "$GREEN" "$NC"
+    printf '%bPress any key to return%b\n' "$GRAY" "$NC"
+    read_key >/dev/null
+    return 0
+  fi
+
+  if ! check_select_updates "Remove Packages" "Remove"; then
+    return 0
+  fi
+  if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  clear_for_command
+  printf '%bRemove %d package(s)?%b\n\n' "$BLUE" "${#MS_RESULT_VALUES[@]}" "$NC"
+  local item
+  for item in "${MS_RESULT_VALUES[@]}"; do
+    printf '  · %s\n' "$item"
+  done
+  printf '\n%bEnter%b Confirm | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
+  local key
+  key="$(read_key)"
+  if [[ "$key" != "ENTER" ]]; then
+    return 0
+  fi
+
+  clear_for_command
+  local -a args=(remove)
+  for item in "${MS_RESULT_VALUES[@]}"; do
+    args+=(--package "$item")
+  done
+  leave_menu_screen
+  core "${args[@]}"
+  exit $?
 }
 
 run_check_menu() {
@@ -717,7 +782,7 @@ run_uninstall_menu() {
     return 0
   fi
 
-  if ! check_select_updates "Uninstall Apps"; then
+  if ! check_select_updates "Uninstall Apps" "Uninstall"; then
     return 0
   fi
   if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
@@ -949,7 +1014,7 @@ case "${1:-}" in
     core "$@"
   fi
   ;;
-"update" | "check" | "list" | "doctor" | "uninstall")
+"update" | "check" | "list" | "doctor" | "remove" | "uninstall")
   core "$@"
   ;;
 *)
