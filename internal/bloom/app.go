@@ -50,6 +50,8 @@ func (a *App) Run(args []string) int {
 		return a.runDoctor(args[1:])
 	case "check":
 		return a.runCheck(args[1:])
+	case "remove":
+		return a.runRemove(args[1:])
 	case "update":
 		return a.runUpdate(args[1:])
 	case "uninstall":
@@ -66,6 +68,7 @@ func (a *App) printHelp() {
 
 Usage:
   bm check [--format tree|tsv] [--config path]
+  bm remove [--list] [--dry-run] [--package task:package]...
   bm update [--dry-run] [--only task] [--skip task] [--package task:package] [--config path]
   bm uninstall [--list] [--dry-run] [--app /path/to/App.app]...
   bm list [--config path]
@@ -380,6 +383,104 @@ func (a *App) runCheck(args []string) int {
 		return 2
 	}
 	return 0
+}
+
+func (a *App) runRemove(args []string) int {
+	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	listOnly := fs.Bool("list", false, "list removable packages as TSV (task, package)")
+	dryRun := fs.Bool("dry-run", false, "show what would be removed without uninstalling")
+	var packages multiFlag
+	fs.Var(&packages, "package", "remove this task:package; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := newCachedRunner(a.Runner)
+
+	if *listOnly {
+		items, err := ListRemovablePackages(ctx, runner)
+		if err != nil {
+			fmt.Fprintf(a.Err, "remove list error: %v\n", err)
+			return 1
+		}
+		for _, item := range items {
+			fmt.Fprintf(a.Out, "%s\t%s\n", item.Task, item.Name)
+		}
+		return 0
+	}
+
+	refs, err := parsePackageRefs(packages.Values())
+	if err != nil {
+		fmt.Fprintf(a.Err, "package error: %v\n", err)
+		return 2
+	}
+	if len(refs) == 0 {
+		fmt.Fprintln(a.Err, "remove requires --list or --package task:package")
+		return 2
+	}
+	if err := validateRemoveRefs(refs); err != nil {
+		fmt.Fprintf(a.Err, "package error: %v\n", err)
+		return 2
+	}
+
+	results := RemovePackages(ctx, runner, refs, *dryRun)
+	failures := 0
+	successes := 0
+	for _, res := range results {
+		label := res.Package.Task + ":" + res.Package.Name
+		if res.Err != nil {
+			fmt.Fprintf(a.Err, "✗ %s: %v\n", label, res.Err)
+			failures++
+			continue
+		}
+		marker := "✓"
+		if *dryRun {
+			marker = "·"
+		}
+		fmt.Fprintf(a.Out, "%s %s\n", marker, label)
+		successes++
+	}
+
+	if successes > 0 {
+		title := "Removed"
+		if *dryRun {
+			title = "Would remove"
+		}
+		fmt.Fprintf(a.Out, "\n%s %d packages\n", title, successes)
+	}
+	if failures > 0 {
+		return 1
+	}
+	return 0
+}
+
+func validateRemoveRefs(refs []PackageRef) error {
+	for _, ref := range refs {
+		if taskSupportsRemoval(ref.Task) {
+			continue
+		}
+		switch ref.Task {
+		case "cask":
+			return fmt.Errorf("cask packages are applications; use bm uninstall")
+		case "nvim":
+			return fmt.Errorf("nvim plugins are managed by your Neovim config")
+		default:
+			return fmt.Errorf("task %q does not support package removal", ref.Task)
+		}
+	}
+	return nil
+}
+
+func taskSupportsRemoval(name string) bool {
+	switch name {
+	case "brew", "yazi", "mason", "npm":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) runUpdate(args []string) int {
@@ -712,27 +813,19 @@ func filterTasks(tasks []Task, only, skip []string) ([]Task, error) {
 }
 
 func applyPackageFilters(cfg *Config, filters []string) ([]string, error) {
-	if len(filters) == 0 {
+	refs, err := parsePackageRefs(filters)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
 		return nil, nil
 	}
 	if cfg.Tasks == nil {
 		cfg.Tasks = map[string]TaskConfig{}
 	}
 	byTask := map[string][]string{}
-	for _, filter := range filters {
-		task, name, ok := strings.Cut(filter, ":")
-		task = strings.TrimSpace(task)
-		name = strings.TrimSpace(name)
-		if !ok || task == "" || name == "" {
-			return nil, fmt.Errorf("expected task:package, got %q", filter)
-		}
-		if !isDefaultTask(task) {
-			return nil, fmt.Errorf("unknown task %q", task)
-		}
-		if !taskSupportsPackages(task) {
-			return nil, fmt.Errorf("task %q does not support package filters", task)
-		}
-		byTask[task] = append(byTask[task], name)
+	for _, ref := range refs {
+		byTask[ref.Task] = append(byTask[ref.Task], ref.Name)
 	}
 
 	only := make([]string, 0, len(byTask))
@@ -748,6 +841,35 @@ func applyPackageFilters(cfg *Config, filters []string) ([]string, error) {
 		only = append(only, task)
 	}
 	return only, nil
+}
+
+func parsePackageRefs(filters []string) ([]PackageRef, error) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+	refs := make([]PackageRef, 0, len(filters))
+	seen := map[string]bool{}
+	for _, filter := range filters {
+		task, name, ok := strings.Cut(filter, ":")
+		task = strings.TrimSpace(task)
+		name = strings.TrimSpace(name)
+		if !ok || task == "" || name == "" {
+			return nil, fmt.Errorf("expected task:package, got %q", filter)
+		}
+		if !isDefaultTask(task) {
+			return nil, fmt.Errorf("unknown task %q", task)
+		}
+		if !taskSupportsPackages(task) {
+			return nil, fmt.Errorf("task %q does not support package filters", task)
+		}
+		key := task + "\x00" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		refs = append(refs, PackageRef{Task: task, Name: name})
+	}
+	return refs, nil
 }
 
 func resolveConfigPath(path string) string {
