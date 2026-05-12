@@ -587,12 +587,24 @@ select_one() {
 }
 
 run_remove_menu() {
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local task
+  for task in brew yazi mason npm; do
+    MS_VALUES+=("$task")
+    MS_LABELS+=("$task")
+    MS_SELECTED+=("false")
+  done
+  select_one "Choose Remove Category" || return 0
+  task="${MS_RESULT_VALUES[0]}"
+
   clear_for_command
-  printf '%bScanning removable packages...%b\n' "$BLUE" "$NC"
+  printf '%bScanning %s packages...%b\n' "$BLUE" "$task" "$NC"
 
   local output status
   set +e
-  output="$(core remove --list 2>&1)"
+  output="$(core config packages "$task" 2>&1)"
   status=$?
   set -e
   if [[ "$status" -ne 0 ]]; then
@@ -605,22 +617,22 @@ run_remove_menu() {
   MS_VALUES=()
   MS_LABELS=()
   MS_SELECTED=()
-  local task package
-  while IFS=$'\t' read -r task package; do
-    [[ -z "$task" || -z "$package" ]] && continue
-    MS_VALUES+=("${task}:${package}")
-    MS_LABELS+=("${task}  ${package}")
+  local package
+  while IFS= read -r package; do
+    [[ -z "$package" ]] && continue
+    MS_VALUES+=("$package")
+    MS_LABELS+=("$package")
     MS_SELECTED+=("false")
   done <<<"$output"
 
   if [[ "${#MS_VALUES[@]}" -eq 0 ]]; then
-    printf '\n%bNo removable packages found%b\n\n' "$GREEN" "$NC"
+    printf '\n%bNo removable %s packages found%b\n\n' "$GREEN" "$task" "$NC"
     printf '%bPress any key to return%b\n' "$GRAY" "$NC"
     read_key >/dev/null
     return 0
   fi
 
-  if ! check_select_updates "Remove Packages" "Remove"; then
+  if ! check_select_updates "Remove ${task} Packages" "Remove"; then
     return 0
   fi
   if [[ "${#MS_RESULT_VALUES[@]}" -eq 0 ]]; then
@@ -628,10 +640,10 @@ run_remove_menu() {
   fi
 
   clear_for_command
-  printf '%bRemove %d package(s)?%b\n\n' "$BLUE" "${#MS_RESULT_VALUES[@]}" "$NC"
+  printf '%bRemove %d %s package(s)?%b\n\n' "$BLUE" "${#MS_RESULT_VALUES[@]}" "$task" "$NC"
   local item
   for item in "${MS_RESULT_VALUES[@]}"; do
-    printf '  · %s\n' "$item"
+    printf '  · %s:%s\n' "$task" "$item"
   done
   printf '\n%bEnter%b Confirm | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
   local key
@@ -643,7 +655,7 @@ run_remove_menu() {
   clear_for_command
   local -a args=(remove)
   for item in "${MS_RESULT_VALUES[@]}"; do
-    args+=(--package "$item")
+    args+=(--package "${task}:${item}")
   done
   leave_menu_screen
   core "${args[@]}"
