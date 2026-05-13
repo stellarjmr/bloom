@@ -33,6 +33,9 @@ bm remove --package npm:pkg  # remove one package from a task
 bm uninstall                 # remove apps and their leftovers
 bm uninstall --list          # list installed apps as TSV
 bm uninstall --dry-run --app /Applications/Foo.app
+bm clean                     # move cleanable cache files to Trash
+bm clean --dry-run           # preview cleanable files without moving them
+bm clean --whitelist         # choose protected clean whitelist entries
 bm list                      # list configured tasks
 bm doctor                    # show available and missing tools
 bm config                    # open the interactive config menu
@@ -63,6 +66,12 @@ Missing tools are skipped during `bm update` and are not counted in the progress
 The interactive Remove flow lives above Uninstall in the main menu. It lists removable package sets from Config → Packages, then calls official removal APIs/commands such as `brew uninstall`, `ya pkg delete`, `npm uninstall -g`, and Mason's package uninstall API.
 
 Homebrew casks and other `.app` bundles are handled by `bm uninstall`, which includes application leftovers. Neovim plugin install/removal is config-driven, so remove plugins from your Neovim configuration instead of using `bm remove`.
+
+## Clean
+
+`bm clean` moves safe, rebuildable cache and temporary files to the macOS Trash. It is conservative by design: protected system paths, Trash, iCloud/Mobile Documents, Apple Notes, Apple Mail, Keychains, Safari/Cookies, browser history/cookies, LaunchAgents/LaunchDaemons, Messages, Reminders, Photos libraries, and other high-value data are skipped or rejected instead of cleaned.
+
+The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect.
 
 ## Uninstall
 
@@ -99,7 +108,7 @@ Create it with:
 bm config init
 ```
 
-The config controls task order, enable/disable switches, per-task package `include`/`exclude` filters, progress width, and color output. Empty filters mean update every detected package. Run `bm config` to manage tasks and package filters with a Space-select menu, or edit the TOML directly. See `config.example.toml`.
+The config controls task order, enable/disable switches, per-task package `include`/`exclude` filters, the clean whitelist, progress width, and color output. Empty package filters mean update every detected package. Run `bm config` to manage Tasks, Packages, Clean whitelist entries, List, Doctor, Path, and Reset with the interactive menu, or edit the TOML directly. See `config.example.toml`.
 
 ## Neovim
 
