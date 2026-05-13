@@ -180,10 +180,11 @@ draw_menu() {
   menu_option 2 "Remove       Remove packages" "$([[ $selected -eq 2 ]] && echo true || echo false)"
   menu_option 3 "Uninstall    Remove apps completely" "$([[ $selected -eq 3 ]] && echo true || echo false)"
   menu_option 4 "Check        Choose available updates" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Config       Manage settings and checks" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 5 "Clean        Move cache files to Trash" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Config       Manage settings and checks" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 7 "Help         Show commands" "$([[ $selected -eq 7 ]] && echo true || echo false)"
   blank_line
-  printf '%b↑↓/jk | Enter | 1-6 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  printf '%b↑↓/jk | Enter | 1-7 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
   blank_line
   end_draw
 }
@@ -224,8 +225,13 @@ run_menu_selection() {
   2) run_remove_menu ;;
   3) run_uninstall_menu ;;
   4) run_check_menu ;;
-  5) interactive_config_menu ;;
-  6)
+  5)
+    leave_menu_screen
+    core clean
+    exit $?
+    ;;
+  6) interactive_config_menu ;;
+  7)
     leave_menu_screen
     show_help
     exit 0
@@ -257,7 +263,7 @@ interactive_menu() {
       fi
       ;;
     "DOWN")
-      if ((selected < 6)); then
+      if ((selected < 7)); then
         selected=$((selected + 1))
         dirty=true
       fi
