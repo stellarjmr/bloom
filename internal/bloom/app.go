@@ -44,6 +44,8 @@ func (a *App) Run(args []string) int {
 		return 0
 	case "config":
 		return a.runConfig(args[1:])
+	case "clean":
+		return a.runClean(args[1:])
 	case "list":
 		return a.runList(args[1:])
 	case "doctor":
@@ -68,6 +70,7 @@ func (a *App) printHelp() {
 
 Usage:
   bm check [--format tree|tsv] [--config path]
+  bm clean [--dry-run] [--whitelist] [--config path]
   bm remove [--list] [--dry-run] [--package task:package]...
   bm update [--dry-run] [--only task] [--skip task] [--package task:package] [--config path]
   bm uninstall [--list] [--dry-run] [--app /path/to/App.app]...
@@ -113,10 +116,16 @@ func (a *App) runConfig(args []string) int {
 		return a.runConfigPackages(args[1:])
 	case "include":
 		return a.runConfigInclude(args[1:])
+	case "clean-whitelist":
+		return a.runConfigCleanWhitelist(args[1:])
+	case "clean-whitelist-items":
+		return a.runConfigCleanWhitelistItems(args[1:])
 	case "set-tasks":
 		return a.runConfigSetTasks(args[1:])
 	case "set-include":
 		return a.runConfigSetInclude(args[1:])
+	case "set-clean-whitelist":
+		return a.runConfigSetCleanWhitelist(args[1:])
 	case "reset":
 		return a.runConfigReset(args[1:])
 	}
@@ -132,8 +141,11 @@ func (a *App) printConfigHelp() {
   bm config tasks [--config path]
   bm config packages task
   bm config include [--config path] task
+  bm config clean-whitelist [--config path]
+  bm config clean-whitelist-items
   bm config set-tasks [--config path] task...
   bm config set-include [--config path] task package...
+  bm config set-clean-whitelist [--config path] pattern...
   bm config reset [--config path]`)
 }
 
@@ -205,6 +217,44 @@ func (a *App) runConfigInclude(args []string) int {
 	return 0
 }
 
+func (a *App) runConfigCleanWhitelist(args []string) int {
+	fs := flag.NewFlagSet("config clean-whitelist", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(a.Err, "usage: bm config clean-whitelist")
+		return 2
+	}
+	cfg, err := LoadConfig(resolveConfigPath(*configPath))
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	for _, pattern := range cfg.Clean.Whitelist {
+		fmt.Fprintln(a.Out, pattern)
+	}
+	return 0
+}
+
+func (a *App) runConfigCleanWhitelistItems(args []string) int {
+	fs := flag.NewFlagSet("config clean-whitelist-items", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(a.Err, "usage: bm config clean-whitelist-items")
+		return 2
+	}
+	for _, item := range CleanWhitelistItems() {
+		fmt.Fprintf(a.Out, "%s\t%s\t%s\n", item.Label, item.Pattern, item.Category)
+	}
+	return 0
+}
+
 func (a *App) runConfigSetTasks(args []string) int {
 	fs := flag.NewFlagSet("config set-tasks", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
@@ -259,6 +309,31 @@ func (a *App) runConfigSetInclude(args []string) int {
 	return 0
 }
 
+func (a *App) runConfigSetCleanWhitelist(args []string) int {
+	fs := flag.NewFlagSet("config set-clean-whitelist", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	path := resolveConfigPath(*configPath)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SetCleanWhitelist(&cfg, fs.Args()); err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		fmt.Fprintf(a.Err, "config write failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(a.Out, path)
+	return 0
+}
+
 func (a *App) runConfigReset(args []string) int {
 	fs := flag.NewFlagSet("config reset", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
@@ -273,6 +348,74 @@ func (a *App) runConfigReset(args []string) int {
 	}
 	fmt.Fprintln(a.Out, path)
 	return 0
+}
+
+func (a *App) runClean(args []string) int {
+	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	configPath := fs.String("config", "", "config file path")
+	dryRun := fs.Bool("dry-run", false, "show what would be moved to Trash")
+	whitelist := fs.Bool("whitelist", false, "print active clean whitelist")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(a.Err, "unexpected clean argument: %s\n", fs.Arg(0))
+		return 2
+	}
+	if *whitelist {
+		return a.runConfigCleanWhitelist([]string{"--config", resolveConfigPath(*configPath)})
+	}
+
+	cfg, err := LoadConfig(resolveConfigPath(*configPath))
+	if err != nil {
+		fmt.Fprintf(a.Err, "config error: %v\n", err)
+		return 1
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	res := RunClean(ctx, CleanOptions{DryRun: *dryRun, Config: cfg, Runner: newCachedRunner(a.Runner)})
+	printCleanResult(a.Out, a.Err, res)
+	if len(res.Failed) > 0 {
+		return 1
+	}
+	return 0
+}
+
+func printCleanResult(out, errOut io.Writer, res CleanResult) {
+	if res.DryRun {
+		fmt.Fprintln(out, "Clean dry run - no changes made")
+	} else {
+		fmt.Fprintln(out, "Clean - moving files to Trash")
+	}
+	if len(res.Whitelist) > 0 {
+		fmt.Fprintf(out, "Whitelist: %d patterns active\n", len(res.Whitelist))
+	}
+	if len(res.Targets) == 0 {
+		fmt.Fprintln(out, "System already clean; no files moved.")
+	} else {
+		marker := "✓"
+		if res.DryRun {
+			marker = "·"
+		}
+		for _, target := range res.Targets {
+			fmt.Fprintf(out, "%s %s  %s\n", marker, target.Label, FormatBytes(target.SizeKB))
+			fmt.Fprintf(out, "   └── %s\n", target.Path)
+		}
+	}
+	for _, failed := range res.Failed {
+		fmt.Fprintf(errOut, "✗ %s: %s\n", failed.Path, failed.Reason)
+	}
+	if len(res.Targets) > 0 {
+		verb := "Moved"
+		if res.DryRun {
+			verb = "Would move"
+		}
+		fmt.Fprintf(out, "\n%s %d items to Trash (%s)\n", verb, len(res.Targets), FormatBytes(res.TotalKB))
+	}
+	if len(res.Skipped) > 0 {
+		fmt.Fprintf(out, "Skipped %d protected, whitelisted, invalid, or Trash items\n", len(res.Skipped))
+	}
 }
 
 func (a *App) runList(args []string) int {

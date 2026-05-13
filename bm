@@ -180,12 +180,10 @@ draw_menu() {
   menu_option 2 "Remove       Remove packages" "$([[ $selected -eq 2 ]] && echo true || echo false)"
   menu_option 3 "Uninstall    Remove apps completely" "$([[ $selected -eq 3 ]] && echo true || echo false)"
   menu_option 4 "Check        Choose available updates" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "List         Show configured tasks" "$([[ $selected -eq 5 ]] && echo true || echo false)"
-  menu_option 6 "Doctor       Check missing tools" "$([[ $selected -eq 6 ]] && echo true || echo false)"
-  menu_option 7 "Config       Manage tasks and packages" "$([[ $selected -eq 7 ]] && echo true || echo false)"
-  menu_option 8 "Help         Show commands" "$([[ $selected -eq 8 ]] && echo true || echo false)"
+  menu_option 5 "Config       Manage settings and checks" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Help         Show commands" "$([[ $selected -eq 6 ]] && echo true || echo false)"
   blank_line
-  printf '%b↑↓/jk | Enter | 1-8 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  printf '%b↑↓/jk | Enter | 1-6 | V Version | Q Quit%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
   blank_line
   end_draw
 }
@@ -195,6 +193,9 @@ show_help() {
   printf '\n%bCOMMANDS%b\n' "$BLUE" "$NC"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm" "$NC" "Interactive menu"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm check" "$NC" "List available package updates"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm clean" "$NC" "Move cleanable cache files to Trash"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm clean --dry-run" "$NC" "Preview cleanable files"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm clean --whitelist" "$NC" "Choose clean whitelist"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update" "$NC" "Run enabled update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --dry-run" "$NC" "Preview update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --only nvim" "$NC" "Run one task"
@@ -223,16 +224,8 @@ run_menu_selection() {
   2) run_remove_menu ;;
   3) run_uninstall_menu ;;
   4) run_check_menu ;;
-  5)
-    leave_menu_screen
-    exec "$0" list
-    ;;
+  5) interactive_config_menu ;;
   6)
-    leave_menu_screen
-    exec "$0" doctor
-    ;;
-  7) interactive_config_menu ;;
-  8)
     leave_menu_screen
     show_help
     exit 0
@@ -264,7 +257,7 @@ interactive_menu() {
       fi
       ;;
     "DOWN")
-      if ((selected < 8)); then
+      if ((selected < 6)); then
         selected=$((selected + 1))
         dirty=true
       fi
@@ -832,11 +825,14 @@ draw_config_menu() {
   blank_line
   menu_option 1 "Tasks        Choose update tasks" "$([[ $selected -eq 1 ]] && echo true || echo false)"
   menu_option 2 "Packages     Choose packages per task" "$([[ $selected -eq 2 ]] && echo true || echo false)"
-  menu_option 3 "Path         Show config path" "$([[ $selected -eq 3 ]] && echo true || echo false)"
-  menu_option 4 "Reset        Restore default config" "$([[ $selected -eq 4 ]] && echo true || echo false)"
-  menu_option 5 "Back         Return to main menu" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 3 "Clean        Choose clean whitelist" "$([[ $selected -eq 3 ]] && echo true || echo false)"
+  menu_option 4 "List         Show configured tasks" "$([[ $selected -eq 4 ]] && echo true || echo false)"
+  menu_option 5 "Doctor       Check missing tools" "$([[ $selected -eq 5 ]] && echo true || echo false)"
+  menu_option 6 "Path         Show config path" "$([[ $selected -eq 6 ]] && echo true || echo false)"
+  menu_option 7 "Reset        Restore default config" "$([[ $selected -eq 7 ]] && echo true || echo false)"
+  menu_option 8 "Back         Return to main menu" "$([[ $selected -eq 8 ]] && echo true || echo false)"
   blank_line
-  printf '%b↑↓/jk | Enter | 1-5 | Q Back%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
+  printf '%b↑↓/jk | Enter | 1-8 | Q Back%b%s\n' "$GRAY" "$NC" "$CLEAR_EOL"
   blank_line
   end_draw
 }
@@ -919,6 +915,37 @@ configure_packages() {
   fi
 }
 
+configure_clean_whitelist() {
+  local -a include=()
+  local item found selected_item
+  while IFS= read -r item; do
+    [[ -n "$item" ]] && include+=("$item")
+  done < <(core config clean-whitelist)
+
+  MS_VALUES=()
+  MS_LABELS=()
+  MS_SELECTED=()
+  local label pattern category
+  while IFS=$'\t' read -r label pattern category; do
+    [[ -z "$label" || -z "$pattern" ]] && continue
+    MS_VALUES+=("$pattern")
+    MS_LABELS+=("$label")
+    found=false
+    for selected_item in "${include[@]}"; do
+      [[ "$selected_item" == "$pattern" ]] && found=true
+    done
+    if [[ "$found" == "true" ]]; then
+      MS_SELECTED+=("true")
+    else
+      MS_SELECTED+=("false")
+    fi
+  done < <(core config clean-whitelist-items)
+
+  if multi_select "Choose clean whitelist"; then
+    core config set-clean-whitelist "${MS_RESULT_VALUES[@]}" >/dev/null
+  fi
+}
+
 reset_config() {
   clear_for_command
   printf '%bReset Bloom config to defaults?%b\n\n' "$BLUE" "$NC"
@@ -934,14 +961,23 @@ run_config_selection() {
   case "$1" in
   1) configure_tasks ;;
   2) configure_packages ;;
-  3)
+  3) configure_clean_whitelist ;;
+  4)
+    leave_menu_screen
+    exec "$0" list
+    ;;
+  5)
+    leave_menu_screen
+    exec "$0" doctor
+    ;;
+  6)
     clear_for_command
     core config path
     printf '\n%bPress any key to return%b\n' "$GRAY" "$NC"
     read_key >/dev/null
     ;;
-  4) reset_config ;;
-  5) return 1 ;;
+  7) reset_config ;;
+  8) return 1 ;;
   esac
   reset_draw
   return 0
@@ -973,7 +1009,7 @@ interactive_config_menu() {
       fi
       ;;
     "DOWN")
-      if ((selected < 5)); then
+      if ((selected < 8)); then
         selected=$((selected + 1))
         dirty=true
       fi
@@ -1022,6 +1058,16 @@ case "${1:-}" in
 "config")
   if [[ $# -eq 1 ]]; then
     interactive_config_menu
+  else
+    core "$@"
+  fi
+  ;;
+"clean")
+  if [[ "${2:-}" == "--whitelist" && "$#" -eq 2 && -t 0 && -t 1 ]]; then
+    enter_menu_screen || true
+    trap 'leave_menu_screen; exit 130' INT TERM
+    configure_clean_whitelist
+    leave_menu_screen
   else
     core "$@"
   fi

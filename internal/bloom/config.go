@@ -13,6 +13,7 @@ import (
 type Config struct {
 	TaskOrder     []string
 	Tasks         map[string]TaskConfig
+	Clean         CleanConfig
 	ProgressWidth int
 	Color         bool
 }
@@ -35,6 +36,7 @@ func DefaultConfig() Config {
 		TaskOrder:     DefaultTaskNames(),
 		ProgressWidth: 24,
 		Color:         true,
+		Clean:         CleanConfig{Whitelist: DefaultCleanWhitelist()},
 		Tasks: map[string]TaskConfig{
 			"brew":    {Enabled: true},
 			"cask":    {Enabled: true},
@@ -110,6 +112,10 @@ func LoadConfig(path string) (Config, error) {
 				return cfg, fmt.Errorf("%s:%d: %w", path, lineNo, err)
 			}
 			cfg.Tasks[name] = task
+		case section == "clean":
+			if err := parseCleanSetting(&cfg.Clean, key, value); err != nil {
+				return cfg, fmt.Errorf("%s:%d: %w", path, lineNo, err)
+			}
 		default:
 			return cfg, fmt.Errorf("%s:%d: unsupported section [%s]", path, lineNo, section)
 		}
@@ -155,6 +161,9 @@ func ConfigText(cfg Config) string {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "[tasks]")
 	fmt.Fprintf(&b, "order = %s\n", formatStringArray(cfg.TaskOrder))
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "[clean]")
+	fmt.Fprintf(&b, "whitelist = %s\n", formatStringArray(cfg.Clean.Whitelist))
 
 	for _, name := range cfg.TaskOrder {
 		task := cfg.Tasks[name]
@@ -321,6 +330,20 @@ func parseTaskSetting(task *TaskConfig, key, value string) error {
 		task.InstallHint = s
 	default:
 		return fmt.Errorf("unsupported task key %q", key)
+	}
+	return nil
+}
+
+func parseCleanSetting(clean *CleanConfig, key, value string) error {
+	switch key {
+	case "whitelist":
+		items, err := parseStringArray(value)
+		if err != nil {
+			return err
+		}
+		clean.Whitelist = normalizeCleanWhitelist(items)
+	default:
+		return fmt.Errorf("unsupported clean key %q", key)
 	}
 	return nil
 }
