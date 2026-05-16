@@ -614,6 +614,38 @@ func validateCleanPath(path string) error {
 	return nil
 }
 
+func validateTrashMovePath(path string) error {
+	if path == "" {
+		return errors.New("empty path")
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("path must be absolute: %s", path)
+	}
+	if hasDotDotComponent(path) {
+		return fmt.Errorf("path traversal not allowed: %s", path)
+	}
+	if hasControlChar(path) {
+		return fmt.Errorf("control characters not allowed: %s", path)
+	}
+	cleaned := filepath.Clean(path)
+	if err := validateCleanSymlinkTarget(cleaned); err != nil {
+		return err
+	}
+	variants := resolvedCleanPathVariants(cleaned)
+	for _, candidate := range variants {
+		if isTrashCleanPath(candidate) {
+			return fmt.Errorf("refusing to move Trash to Trash: %s", candidate)
+		}
+		if isBlockedSystemCleanPath(candidate) {
+			return fmt.Errorf("critical system path: %s", candidate)
+		}
+	}
+	if len(variants) > 1 && !isAllowedCleanCanonicalization(variants[0], variants[1]) {
+		return fmt.Errorf("refusing redirected trash path: %s -> %s", variants[0], variants[1])
+	}
+	return nil
+}
+
 func resolvedCleanPathVariants(path string) []string {
 	cleaned := filepath.Clean(path)
 	variants := []string{cleaned}
@@ -1132,6 +1164,13 @@ func isLsofNoOpenFiles(out CommandOutput) bool {
 
 func moveCleanPathToTrash(ctx context.Context, runner Runner, path string) error {
 	if err := validateCleanPath(path); err != nil {
+		return err
+	}
+	return movePathToTrash(ctx, runner, path)
+}
+
+func movePathToTrash(ctx context.Context, runner Runner, path string) error {
+	if err := validateTrashMovePath(path); err != nil {
 		return err
 	}
 	if testTrash := os.Getenv("BLOOM_TEST_TRASH_DIR"); testTrash != "" {

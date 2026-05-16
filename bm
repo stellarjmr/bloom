@@ -800,25 +800,12 @@ run_uninstall_menu() {
     return 0
   fi
 
-  clear_for_command
-  printf '%bUninstall %d app(s)?%b\n\n' "$BLUE" "${#MS_RESULT_VALUES[@]}" "$NC"
-  local item base
-  for item in "${MS_RESULT_VALUES[@]}"; do
-    base="$(basename "$item" .app)"
-    printf '  · %s\n' "$base"
-  done
-  printf '\n%bEnter%b Confirm | %bQ%b Cancel\n' "$GREEN" "$NC" "$GRAY" "$NC"
-  local key
-  key="$(read_key)"
-  if [[ "$key" != "ENTER" ]]; then
-    return 0
-  fi
-
-  clear_for_command
   local -a args=(uninstall)
+  local item
   for item in "${MS_RESULT_VALUES[@]}"; do
     args+=(--app "$item")
   done
+  drain_pending_input
   leave_menu_screen
   core "${args[@]}"
   exit $?

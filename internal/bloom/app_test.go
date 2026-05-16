@@ -349,3 +349,82 @@ func TestFindRelatedPathsIncludesDiagnostics(t *testing.T) {
 		t.Fatalf("paths missing diagnostic %q: %#v", diagnostic, paths)
 	}
 }
+
+func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	testTrash := filepath.Join(home, "trash-stub")
+	t.Setenv("BLOOM_TEST_TRASH_DIR", testTrash)
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	appFile := filepath.Join(appPath, "Contents", "MacOS", "foo")
+	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	cacheFile := filepath.Join(cachePath, "cache.db")
+	for _, path := range []string{appFile, cacheFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summary := BatchUninstall(context.Background(), pathRunner{}, []AppEntry{{
+		Path:     appPath,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	}}, false)
+	if len(summary.Results) != 1 {
+		t.Fatalf("results = %d, want 1", len(summary.Results))
+	}
+	res := summary.Results[0]
+	if res.Err != nil {
+		t.Fatalf("uninstall error = %v", res.Err)
+	}
+	if len(res.Failed) > 0 {
+		t.Fatalf("failed paths = %#v", res.Failed)
+	}
+	for _, path := range []string{appPath, cachePath} {
+		if !containsString(res.Files, path) {
+			t.Fatalf("result files missing %q: %#v", path, res.Files)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("original path %q still exists or stat failed unexpectedly: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(testTrash, "Foo.app", "Contents", "MacOS", "foo"),
+		filepath.Join(testTrash, "com.example.foo", "cache.db"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("trashed path %q missing: %v", path, err)
+		}
+	}
+}
+
+func TestMovePathToTrashStubbornNeverPermanentDeletesOnTrashFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	trashFile := filepath.Join(home, "not-a-trash-dir")
+	if err := os.WriteFile(trashFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BLOOM_TEST_TRASH_DIR", trashFile)
+
+	target := filepath.Join(home, "target")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &recordingRunner{outputs: map[string]CommandOutput{}}
+	if err := movePathToTrashStubborn(context.Background(), r, target); err == nil {
+		t.Fatal("movePathToTrashStubborn succeeded with invalid Trash directory")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target should remain after Trash failure: %v", err)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, "/bin/rm") || strings.HasPrefix(call, "sudo ") {
+			t.Fatalf("permanent deletion command was used: calls = %#v", r.calls)
+		}
+	}
+}

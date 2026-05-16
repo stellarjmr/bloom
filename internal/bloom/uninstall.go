@@ -578,15 +578,15 @@ func diagnosticReportNameMatches(name string, prefixes []string) bool {
 	return false
 }
 
-// UninstallApp removes the bundle and all related files for one app.
-// If dryRun is true, no files are touched and Files lists what would have
-// been removed.
+// UninstallApp moves the bundle and all related files for one app to Trash.
+// If dryRun is true, no files are touched and Files lists what would be
+// moved.
 //
 // Order matters for Homebrew casks: brew must be invoked BEFORE the .app
 // bundle is deleted so it can detect its own artifact and clean its
 // receipt under Caskroom. Otherwise `brew list --cask` would still
 // report the cask as installed.
-func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun, sudoActive bool) UninstallResult {
+func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool) UninstallResult {
 	res := UninstallResult{App: app}
 	if app.Path == "" {
 		res.Err = errors.New("missing app path")
@@ -621,7 +621,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun, sudo
 		if _, err := os.Lstat(p); err != nil {
 			continue
 		}
-		if err := removePathStubborn(ctx, runner, p, sudoActive); err != nil {
+		if err := movePathToTrashStubborn(ctx, runner, p); err != nil {
 			res.Failed = append(res.Failed, p)
 			continue
 		}
@@ -640,29 +640,17 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun, sudo
 	return res
 }
 
-// BatchUninstall removes a list of apps and then runs shared post-batch
+// BatchUninstall uninstalls a list of apps and then runs shared post-batch
 // cleanup once: refresh LaunchServices, remove Dock entries, run
-// `brew autoremove` if any cask was removed. When any candidate path
-// lives in a TCC-restricted or system directory it prompts for the
-// admin password once at the start and keeps the sudo session alive
-// for the duration of the batch.
+// `brew autoremove` if any cask was removed. Bloom-managed paths are moved to
+// Trash; paths that macOS refuses to trash are reported as failures instead of
+// being permanently deleted.
 func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun bool) BatchSummary {
 	var sum BatchSummary
 	anyBrew := false
 
-	sudoActive := false
-	if !dryRun && batchNeedsSudo(apps) {
-		stop, err := acquireSudo(ctx)
-		if err == nil {
-			sudoActive = true
-			defer stop()
-		}
-		// Failure is non-fatal; we fall back to non-sudo cleanup and
-		// the caller will see the unwritable paths in res.Failed.
-	}
-
 	for _, app := range apps {
-		res := UninstallApp(ctx, runner, app, dryRun, sudoActive)
+		res := UninstallApp(ctx, runner, app, dryRun)
 		sum.Results = append(sum.Results, res)
 		sum.TotalRemovedKB += res.RemovedKB
 		if res.BrewRemoved {
@@ -680,62 +668,6 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		sum.BrewAutoremove = out.Err == nil
 	}
 	return sum
-}
-
-// batchNeedsSudo reports whether any candidate path will likely require
-// admin privileges. macOS TCC restricts user-mode access to
-// ~/Library/Containers, ~/Library/Group Containers, and
-// ~/Library/Application Scripts unless the terminal has Full Disk Access;
-// anything under /Library is owned by root.
-func batchNeedsSudo(apps []AppEntry) bool {
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		return false
-	}
-	roots := []string{
-		filepath.Join(home, "Library", "Containers") + string(os.PathSeparator),
-		filepath.Join(home, "Library", "Group Containers") + string(os.PathSeparator),
-		filepath.Join(home, "Library", "Application Scripts") + string(os.PathSeparator),
-		"/Library/",
-	}
-	for _, app := range apps {
-		for _, p := range FindRelatedPaths(app) {
-			for _, root := range roots {
-				if strings.HasPrefix(p, root) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// acquireSudo prompts the user for the admin password once via the
-// terminal and starts a keepalive goroutine that pings `sudo -n -v`
-// every 60 seconds so subsequent sudo calls during the batch never
-// re-prompt. Returns a cancel function for the keepalive.
-func acquireSudo(ctx context.Context) (func(), error) {
-	cmd := exec.CommandContext(ctx, "sudo", "-v", "-p", "Bloom needs admin to remove protected files. Password: ")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return func() {}, err
-	}
-	keepCtx, cancel := context.WithCancel(ctx)
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-keepCtx.Done():
-				return
-			case <-ticker.C:
-				_ = exec.Command("sudo", "-n", "-v").Run()
-			}
-		}
-	}()
-	return cancel, nil
 }
 
 // removeLoginItem deletes a macOS Login Item entry whose name matches the app.
@@ -1069,40 +1001,19 @@ func isValidCaskToken(token string) bool {
 	return true
 }
 
-// removePathStubborn deletes p, retrying for paths that resist Go's
-// os.RemoveAll. macOS sandboxed app containers under
-// ~/Library/Containers/<bundleID> often carry the user-immutable flag,
-// no-write permissions, or extended attributes that Go's pure-Go walker
-// cannot strip. The fallback clears those flags and shells out to the
-// system rm, which is what every macOS uninstaller relies on.
-func removePathStubborn(ctx context.Context, runner Runner, p string, sudoActive bool) error {
-	if err := os.RemoveAll(p); err == nil {
-		if _, err := os.Lstat(p); err != nil {
-			return nil
-		}
+// movePathToTrashStubborn moves p to Trash, retrying after clearing common
+// macOS flags and write bits. It deliberately never falls back to permanent
+// deletion; paths that macOS refuses to trash are reported to the caller.
+func movePathToTrashStubborn(ctx context.Context, runner Runner, p string) error {
+	if err := movePathToTrash(ctx, runner, p); err == nil {
+		return nil
 	}
 	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
 	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
-	if err := os.RemoveAll(p); err == nil {
-		if _, err := os.Lstat(p); err != nil {
-			return nil
-		}
+	if err := movePathToTrash(ctx, runner, p); err == nil {
+		return nil
 	}
-	if out := runner.Run(ctx, "/bin/rm", "-rf", p); out.Err == nil {
-		if _, err := os.Lstat(p); err != nil {
-			return nil
-		}
-	}
-	if sudoActive {
-		_ = runner.Run(ctx, "sudo", "-n", "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
-		_ = runner.Run(ctx, "sudo", "-n", "/bin/chmod", "-R", "u+w", p)
-		if out := runner.Run(ctx, "sudo", "-n", "/bin/rm", "-rf", p); out.Err == nil {
-			if _, err := os.Lstat(p); err != nil {
-				return nil
-			}
-		}
-	}
-	return fmt.Errorf("could not remove")
+	return fmt.Errorf("could not move to Trash")
 }
 
 func pathSizeKB(p string) int64 {

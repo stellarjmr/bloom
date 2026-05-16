@@ -1,6 +1,7 @@
 package bloom
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -798,8 +799,52 @@ func (a *App) runUninstall(args []string) int {
 		targets = append(targets, entry)
 	}
 
-	summary := BatchUninstall(ctx, runner, targets, *dryRun)
-	removedNames := []string{}
+	if len(targets) == 0 {
+		if failures > 0 {
+			return 1
+		}
+		return 0
+	}
+
+	if *dryRun {
+		fmt.Fprintln(a.Out, "Would move the following items to Trash:")
+		summary := BatchUninstall(ctx, runner, targets, true)
+		_, printFailures := a.printUninstallSummary(summary, true)
+		failures += printFailures
+	} else {
+		fmt.Fprintln(a.Out, "The following items will be moved to Trash:")
+		plan := BatchUninstall(ctx, runner, targets, true)
+		planned, printFailures := a.printUninstallSummary(plan, true)
+		failures += printFailures
+		if planned == 0 {
+			if failures > 0 {
+				return 1
+			}
+			return 0
+		}
+		if !confirmUninstall(os.Stdin, a.Out) {
+			fmt.Fprintln(a.Out, "Canceled")
+			if failures > 0 {
+				return 1
+			}
+			return 0
+		}
+
+		fmt.Fprintln(a.Out)
+		summary := BatchUninstall(ctx, runner, targets, false)
+		_, printFailures = a.printUninstallSummary(summary, false)
+		failures += printFailures
+	}
+
+	if failures > 0 {
+		return 1
+	}
+	return 0
+}
+
+func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool) (int, int) {
+	processed := 0
+	failures := 0
 	for _, res := range summary.Results {
 		if res.Err != nil {
 			fmt.Fprintf(a.Err, "✗ %s: %v\n", res.App.Name, res.Err)
@@ -807,7 +852,7 @@ func (a *App) runUninstall(args []string) int {
 			continue
 		}
 		marker := "✓"
-		if *dryRun {
+		if dryRun {
 			marker = "·"
 		}
 		brewNote := ""
@@ -816,33 +861,41 @@ func (a *App) runUninstall(args []string) int {
 		}
 		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
 		fileMark := "✓"
-		if *dryRun {
+		if dryRun {
 			fileMark = "·"
 		}
 		for _, p := range res.Files {
 			fmt.Fprintf(a.Out, "   %s %s\n", fileMark, p)
 		}
 		for _, p := range res.Failed {
-			fmt.Fprintf(a.Err, "   ! could not remove %s\n", p)
+			fmt.Fprintf(a.Err, "   ! could not move to Trash %s\n", p)
 		}
-		removedNames = append(removedNames, res.App.Name)
+		processed++
 	}
 
-	if len(removedNames) > 0 {
-		title := "Uninstalled"
-		if *dryRun {
-			title = "Would remove"
+	if processed > 0 {
+		if dryRun {
+			fmt.Fprintf(a.Out, "\nWould move %d apps to Trash, total %s\n", processed, FormatBytes(summary.TotalRemovedKB))
+		} else {
+			fmt.Fprintf(a.Out, "\nUninstalled %d apps, moved %s to Trash\n", processed, FormatBytes(summary.TotalRemovedKB))
 		}
-		fmt.Fprintf(a.Out, "\n%s %d apps, freed %s\n", title, len(removedNames), FormatBytes(summary.TotalRemovedKB))
 		if summary.BrewAutoremove {
 			fmt.Fprintln(a.Out, "ran brew autoremove")
 		}
 	}
+	return processed, failures
+}
 
-	if failures > 0 {
-		return 1
+func confirmUninstall(in io.Reader, out io.Writer) bool {
+	fmt.Fprintln(out)
+	fmt.Fprint(out, "Press Enter to move these items to Trash, or Q to cancel: ")
+	answer, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && answer == "" {
+		fmt.Fprintln(out)
+		return false
 	}
-	return 0
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "" || answer == "y" || answer == "yes"
 }
 
 func filterRunnableTasks(tasks []Task, runner Runner) []Task {
