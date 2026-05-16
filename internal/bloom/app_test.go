@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -348,6 +349,206 @@ func TestFindRelatedPathsIncludesDiagnostics(t *testing.T) {
 	if !containsString(paths, diagnostic) {
 		t.Fatalf("paths missing diagnostic %q: %#v", diagnostic, paths)
 	}
+}
+
+func TestFindRelatedPathsIncludesVSCodeStablePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Visual Studio Code.app")
+	wantPaths := []string{
+		appPath,
+		filepath.Join(home, ".vscode"),
+		filepath.Join(home, "Library", "Application Support", "Code"),
+		filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode"),
+		filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode.ShipIt"),
+	}
+	for _, path := range wantPaths {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insidersSupport := filepath.Join(home, "Library", "Application Support", "Code - Insiders")
+	if err := os.MkdirAll(insidersSupport, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+	for _, path := range wantPaths {
+		if !containsString(paths, path) {
+			t.Fatalf("paths missing VS Code path %q: %#v", path, paths)
+		}
+	}
+	if containsString(paths, insidersSupport) {
+		t.Fatalf("stable VS Code matched Insiders Application Support: %#v", paths)
+	}
+}
+
+func TestFindRelatedPathsIncludesVSCodeInsidersPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Visual Studio Code - Insiders.app")
+	wantPaths := []string{
+		appPath,
+		filepath.Join(home, ".vscode-insiders"),
+		filepath.Join(home, "Library", "Application Support", "Code - Insiders"),
+		filepath.Join(home, "Library", "Caches", "com.microsoft.VSCodeInsiders"),
+		filepath.Join(home, "Library", "Caches", "com.microsoft.VSCodeInsiders.ShipIt"),
+	}
+	for _, path := range wantPaths {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stableSupport := filepath.Join(home, "Library", "Application Support", "Code")
+	if err := os.MkdirAll(stableSupport, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Visual Studio Code - Insiders", BundleID: "com.microsoft.VSCodeInsiders"})
+	for _, path := range wantPaths {
+		if !containsString(paths, path) {
+			t.Fatalf("paths missing VS Code Insiders path %q: %#v", path, paths)
+		}
+	}
+	if containsString(paths, stableSupport) {
+		t.Fatalf("VS Code Insiders matched stable Application Support: %#v", paths)
+	}
+}
+
+func TestLooksLikeBundleIDRequiresReverseDNSComponents(t *testing.T) {
+	valid := []string{
+		"com.example.app",
+		"com.microsoft.VSCode",
+		"dev.zed.Zed-Nightly",
+		"org.keepassxc.KeePassXC",
+	}
+	for _, id := range valid {
+		if !looksLikeBundleID(id) {
+			t.Fatalf("looksLikeBundleID(%q) = false, want true", id)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"com",
+		".com.example",
+		"com..example",
+		"com.example.",
+		"com/example/app",
+		"com.*.app",
+		"-com.example.app",
+		"com.-example.app",
+		"com.example_app",
+	}
+	for _, id := range invalid {
+		if looksLikeBundleID(id) {
+			t.Fatalf("looksLikeBundleID(%q) = true, want false", id)
+		}
+	}
+}
+
+func TestBundleDomainPrefixRequiresProductComponent(t *testing.T) {
+	if got := bundleDomainPrefix("com.example.foo"); got != "com.example" {
+		t.Fatalf("bundleDomainPrefix valid = %q, want com.example", got)
+	}
+	for _, id := range []string{"com", "com.example", "com..example.foo", "com.*.foo"} {
+		if got := bundleDomainPrefix(id); got != "" {
+			t.Fatalf("bundleDomainPrefix(%q) = %q, want empty", id, got)
+		}
+	}
+}
+
+func TestStopAppUsesBundleExecutableForProcessKill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	appPath := filepath.Join(home, "Applications", "Visual Studio Code.app")
+	writeTestInfoPlist(t, appPath, "com.microsoft.VSCode", "Code")
+	r := &processRunner{running: map[string]bool{"Code": true}}
+
+	stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+
+	if !runnerCallContains(r.calls, `/usr/bin/osascript -e tell application id "com.microsoft.VSCode" to quit`) {
+		t.Fatalf("osascript quit not called with bundle id: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/usr/bin/pkill -x Code") {
+		t.Fatalf("pkill not called with CFBundleExecutable: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/usr/bin/pkill -x Visual Studio Code") {
+		t.Fatalf("pkill used display name instead of executable: %#v", r.calls)
+	}
+}
+
+func TestStopAppFallsBackToAppNameWhenExecutableMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	r := &processRunner{running: map[string]bool{"Foo": true}}
+	stopApp(context.Background(), r, AppEntry{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo"})
+	if !runnerCallContains(r.calls, "/usr/bin/pkill -x Foo") {
+		t.Fatalf("pkill did not fall back to app name: %#v", r.calls)
+	}
+}
+
+type processRunner struct {
+	running map[string]bool
+	calls   []string
+}
+
+func (r *processRunner) LookPath(file string) (string, error) {
+	return "/bin/" + file, nil
+}
+
+func (r *processRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	if name == "/usr/bin/pgrep" {
+		if len(args) > 0 && r.running[args[len(args)-1]] {
+			return CommandOutput{Stdout: "123\n"}
+		}
+		return CommandOutput{Err: errors.New("not running")}
+	}
+	if name == "/usr/bin/pkill" && len(args) > 0 {
+		r.running[args[len(args)-1]] = false
+	}
+	return CommandOutput{}
+}
+
+func writeTestInfoPlist(t *testing.T, appPath, bundleID, executable string) {
+	t.Helper()
+	contents := filepath.Join(appPath, "Contents")
+	if err := os.MkdirAll(contents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>%s</string>
+  <key>CFBundleExecutable</key>
+  <string>%s</string>
+</dict>
+</plist>
+`, bundleID, executable)
+	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runnerCallContains(calls []string, want string) bool {
+	for _, call := range calls {
+		if strings.Contains(call, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {

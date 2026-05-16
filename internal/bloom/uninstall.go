@@ -286,20 +286,41 @@ func readBundleExecutable(appPath string) string {
 }
 
 func looksLikeBundleID(id string) bool {
-	if !strings.Contains(id, ".") {
+	parts := strings.Split(id, ".")
+	if len(parts) < 2 {
 		return false
 	}
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9',
-			r == '.', r == '-', r == '_':
-		default:
+	for _, part := range parts {
+		if part == "" {
 			return false
+		}
+		for i, r := range part {
+			if i == 0 && !isBundleIDAlphaNum(r) {
+				return false
+			}
+			if !isBundleIDAlphaNum(r) && r != '-' {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+func isBundleIDAlphaNum(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9')
+}
+
+func bundleIDComponents(id string) []string {
+	if !looksLikeBundleID(id) {
+		return nil
+	}
+	return strings.Split(id, ".")
+}
+
+func bundleIDEqual(id, want string) bool {
+	return strings.EqualFold(id, want)
 }
 
 func directorySizeKB(path string) int64 {
@@ -362,6 +383,7 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 	matchGroupContainers(app, &paths)
 	matchDiagnosticReports(app, &paths)
+	matchVSCodePaths(app, &paths)
 
 	// Preferences: <bundleID>.plist + ByHost variants
 	prefDir := filepath.Join(home, "Library", "Preferences")
@@ -397,6 +419,33 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 
 	return out
+}
+
+func matchVSCodePaths(app AppEntry, out *[]string) {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+
+	stable := bundleIDEqual(app.BundleID, "com.microsoft.VSCode") || strings.EqualFold(app.Name, "Visual Studio Code")
+	insiders := bundleIDEqual(app.BundleID, "com.microsoft.VSCodeInsiders") || strings.EqualFold(app.Name, "Visual Studio Code - Insiders")
+	if !stable && !insiders {
+		return
+	}
+	add := func(p string) {
+		*out = append(*out, p)
+	}
+	if insiders {
+		add(filepath.Join(home, ".vscode-insiders"))
+		add(filepath.Join(home, "Library", "Application Support", "Code - Insiders"))
+		add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCodeInsiders"))
+		add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCodeInsiders.ShipIt"))
+		return
+	}
+	add(filepath.Join(home, ".vscode"))
+	add(filepath.Join(home, "Library", "Application Support", "Code"))
+	add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode"))
+	add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode.ShipIt"))
 }
 
 // matchInDir scans dir for entries containing token (case-insensitive) and
@@ -452,17 +501,11 @@ func matchGroupContainers(app AppEntry, out *[]string) {
 }
 
 func bundleDomainPrefix(bundleID string) string {
-	if !looksLikeBundleID(bundleID) {
+	parts := bundleIDComponents(bundleID)
+	if len(parts) < 3 {
 		return ""
 	}
-	prefix := bundleID
-	if idx := strings.LastIndex(prefix, "."); idx >= 0 {
-		prefix = prefix[:idx]
-	}
-	if !strings.Contains(prefix, ".") || len(prefix) < 5 {
-		return ""
-	}
-	return prefix
+	return strings.Join(parts[:len(parts)-1], ".")
 }
 
 func groupContainerMatches(name, teamID, domainPrefix string, allowDomainFallback bool) bool {
@@ -780,14 +823,33 @@ func urlPathEscape(p string) string {
 	return r.Replace(p)
 }
 
+const (
+	stopAppQuitPolls = 10
+	stopAppKillPolls = 5
+)
+
+var stopAppPollInterval = 100 * time.Millisecond
+
 func stopApp(ctx context.Context, runner Runner, app AppEntry) {
-	if app.BundleID != "" {
+	matchName := readBundleExecutable(app.Path)
+	if matchName == "" {
+		matchName = app.Name
+	}
+
+	running := processRunning(ctx, runner, matchName)
+	if running && app.BundleID != "" {
 		_ = runner.Run(ctx, "/usr/bin/osascript", "-e",
 			fmt.Sprintf(`tell application id "%s" to quit`, app.BundleID))
+		running = !waitForProcessExit(ctx, runner, matchName, stopAppQuitPolls)
 	}
-	// Hard fallback after a short grace period.
-	time.Sleep(150 * time.Millisecond)
-	_ = runner.Run(ctx, "/usr/bin/pkill", "-x", app.Name)
+	if running {
+		_ = runner.Run(ctx, "/usr/bin/pkill", "-x", matchName)
+		running = !waitForProcessExit(ctx, runner, matchName, stopAppKillPolls)
+	}
+	if running {
+		_ = runner.Run(ctx, "/usr/bin/pkill", "-9", "-x", matchName)
+		_ = waitForProcessExit(ctx, runner, matchName, stopAppKillPolls)
+	}
 
 	if app.BundleID == "" {
 		return
@@ -808,6 +870,33 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) {
 		}
 		_ = runner.Run(ctx, "/bin/launchctl", "unload", filepath.Join(dir, name))
 	}
+}
+
+func processRunning(ctx context.Context, runner Runner, name string) bool {
+	if name == "" {
+		return false
+	}
+	out := runner.Run(ctx, "/usr/bin/pgrep", "-x", name)
+	return out.Err == nil && strings.TrimSpace(out.Stdout) != ""
+}
+
+func waitForProcessExit(ctx context.Context, runner Runner, name string, polls int) bool {
+	for i := 0; i < polls; i++ {
+		if !processRunning(ctx, runner, name) {
+			return true
+		}
+		if stopAppPollInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(stopAppPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return true
+		case <-timer.C:
+		}
+	}
+	return !processRunning(ctx, runner, name)
 }
 
 // caskroomDirs lists the standard Homebrew Caskroom locations on macOS.
