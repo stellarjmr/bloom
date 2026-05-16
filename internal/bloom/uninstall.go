@@ -255,10 +255,12 @@ func readBundleID(appPath string) string {
 	}
 	cmd := exec.Command("/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", plist)
 	out, err := cmd.Output()
-	if err != nil {
-		return ""
+	id := ""
+	if err == nil {
+		id = strings.TrimSpace(string(out))
+	} else {
+		id = readXMLPlistString(plist, "CFBundleIdentifier")
 	}
-	id := strings.TrimSpace(string(out))
 	if id == "(null)" || id == "" {
 		return ""
 	}
@@ -275,14 +277,40 @@ func readBundleExecutable(appPath string) string {
 	}
 	cmd := exec.Command("/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", plist)
 	out, err := cmd.Output()
-	if err != nil {
-		return ""
+	name := ""
+	if err == nil {
+		name = strings.TrimSpace(string(out))
+	} else {
+		name = readXMLPlistString(plist, "CFBundleExecutable")
 	}
-	name := strings.TrimSpace(string(out))
 	if name == "(null)" {
 		return ""
 	}
 	return name
+}
+
+func readXMLPlistString(plist, key string) string {
+	data, err := os.ReadFile(plist)
+	if err != nil {
+		return ""
+	}
+	text := string(data)
+	marker := "<key>" + key + "</key>"
+	idx := strings.Index(text, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := text[idx+len(marker):]
+	start := strings.Index(rest, "<string>")
+	if start < 0 {
+		return ""
+	}
+	rest = rest[start+len("<string>"):]
+	end := strings.Index(rest, "</string>")
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
 }
 
 func looksLikeBundleID(id string) bool {
