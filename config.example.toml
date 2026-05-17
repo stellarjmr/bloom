@@ -8,7 +8,7 @@ color = true
 order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
 
 [clean]
-whitelist = ["~/Library/Caches/ms-playwright*", "~/.cache/huggingface*", "~/.m2/repository/*", "~/.gradle/caches/*", "~/.gradle/daemon/*", "~/.ollama/models/*", "~/Library/Caches/com.nssurge.surge-mac/*", "~/Library/Application Support/com.nssurge.surge-mac/*", "~/Library/Caches/org.R-project.R/R/renv/*", "~/Library/Caches/pypoetry/virtualenvs*", "~/Library/Caches/JetBrains*", "~/Library/Caches/com.jetbrains.toolbox*", "~/Library/Caches/tealdeer/tldr-pages", "~/Library/Application Support/JetBrains*", "~/Library/Caches/com.apple.finder", "~/Library/Mobile Documents*", "~/Library/Caches/com.apple.FontRegistry*", "~/Library/Caches/com.apple.spotlight*", "~/Library/Caches/com.apple.Spotlight*", "~/Library/Caches/CloudKit*", "~/.Trash", "FINDER_METADATA"]
+whitelist = ["~/Library/Caches/ms-playwright*", "~/.cache/huggingface*", "~/.m2/repository/*", "~/.gradle/caches/*", "~/.gradle/daemon/*", "~/.ollama/models/*", "~/Library/Caches/com.nssurge.surge-mac/*", "~/Library/Application Support/com.nssurge.surge-mac/*", "~/Library/Caches/org.R-project.R/R/renv/*", "~/Library/Caches/pypoetry/virtualenvs*", "~/Library/Caches/JetBrains*", "~/Library/Caches/com.jetbrains.toolbox*", "~/Library/Caches/tealdeer/tldr-pages", "~/Library/Application Support/JetBrains*", "~/Library/Caches/com.apple.finder", "~/Library/Mobile Documents*", "~/Library/Caches/com.apple.FontRegistry*", "~/Library/Caches/com.apple.spotlight*", "~/Library/Caches/com.apple.Spotlight*", "~/Library/Caches/CloudKit*", "~/Library/Caches/PassKit*", "~/.Trash", "FINDER_METADATA"]
 
 [tasks.brew]
 enabled = true

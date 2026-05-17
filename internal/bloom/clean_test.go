@@ -59,6 +59,7 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "paper.pdf"),
 		filepath.Join(home, "Library", "Application Support", "CloudDocs", "session.db"),
 		filepath.Join(home, "Library", "Caches", "CloudKit", "sync-state.db"),
+		filepath.Join(home, "Library", "Caches", "PassKit", "passes.db"),
 		filepath.Join(home, "Library", "Group Containers", "group.com.apple.notes", "NoteStore.sqlite"),
 		filepath.Join(home, "Library", "Containers", "com.apple.Notes", "Data", "Library", "Caches", "note-cache"),
 		filepath.Join(home, "Library", "Notes", "NotesV7.storedata"),
@@ -78,6 +79,11 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		filepath.Join(home, "Library", "Messages", "chat.db"),
 		filepath.Join(home, "Library", "Reminders", "Container_v1"),
 		filepath.Join(home, "Library", "Application Support", "AddressBook", "AddressBook-v22.abcddb"),
+		filepath.Join(home, "Library", "Application Support", "MobileSync", "Backup", "device", "Manifest.db"),
+		filepath.Join(home, "Library", "Application Support", "Spotify", "PersistentCache", "offline.bnk"),
+		filepath.Join(home, "Library", "Containers", "com.dropbox.DropboxMacUpdate", "Data", "Documents", "state.db"),
+		filepath.Join(home, "Library", "Containers", "com.microsoft.OneDrive-mac", "Data", "Documents", "state.db"),
+		filepath.Join(home, "Library", "Containers", "com.lmstudio.lmstudio", "Data", "models", "model.gguf"),
 		filepath.Join(home, "Pictures", "Photos Library.photoslibrary", "database", "Photos.sqlite"),
 	}
 
@@ -226,6 +232,7 @@ func TestRunCleanNeverTargetsHighValueCachesEvenWithoutWhitelist(t *testing.T) {
 		filepath.Join(home, "Library", "Caches", "DropApp", "data.tmp"),
 		filepath.Join(home, "Library", "Caches", "com.apple.mail", "cache.db"),
 		filepath.Join(home, "Library", "Caches", "CloudKit", "sync-state.db"),
+		filepath.Join(home, "Library", "Caches", "PassKit", "passes.db"),
 	}
 	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -245,9 +252,55 @@ func TestRunCleanNeverTargetsHighValueCachesEvenWithoutWhitelist(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(home, "Library", "Caches", "com.apple.mail"),
 		filepath.Join(home, "Library", "Caches", "CloudKit"),
+		filepath.Join(home, "Library", "Caches", "PassKit"),
 	} {
 		if cleanResultContains(res, path) {
 			t.Fatalf("high-value cache target %q appeared in clean targets: %#v", path, res.Targets)
+		}
+	}
+}
+
+func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	files := []string{
+		filepath.Join(home, ".cache", "webpack", "cache.bin"),
+		filepath.Join(home, ".cache", "node-gyp", "headers.tar.gz"),
+		filepath.Join(home, ".pyenv", "cache", "Python-3.12.0.tar.xz"),
+		filepath.Join(home, ".jupyter", "runtime", "kernel.json"),
+		filepath.Join(home, ".gem", "specs", "rubygems.org%443", "latest_specs.4.8"),
+		filepath.Join(home, ".gem", "ruby", "3.3.0", "cache", "rake.gem"),
+		filepath.Join(home, ".bundle", "cache", "compact_index", "rubygems.org.versions"),
+		filepath.Join(home, ".rbenv", "cache", "ruby-3.3.0.tar.gz"),
+		filepath.Join(home, ".kube", "cache", "discovery", "api.json"),
+		filepath.Join(home, ".aws", "cli", "cache", "session.json"),
+		filepath.Join(home, ".config", "gcloud", "logs", "gcloud.log"),
+		filepath.Join(home, ".azure", "logs", "az.log"),
+		filepath.Join(home, ".cache", "terraform", "plugin.zip"),
+		filepath.Join(home, ".cache", "prisma", "engine.gz"),
+		filepath.Join(home, "Library", "Caches", "lima", "download", "by-url-sha256", "image.tar"),
+		filepath.Join(home, ".vagrant.d", "tmp", "box.tmp"),
+		filepath.Join(home, ".local", "share", "containers", "storage", "tmp", "layer.tmp"),
+		filepath.Join(home, "Library", "Caches", "Zed", "cache.bin"),
+		filepath.Join(home, "Library", "Logs", "Zed", "zed.log"),
+		filepath.Join(home, "Library", "Caches", "com.mitchellh.ghostty", "cache.bin"),
+		filepath.Join(home, "Library", "Caches", "GeoServices", "map.cache"),
+	}
+	for _, path := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	for _, path := range files {
+		if !cleanResultCovers(res, path) {
+			t.Fatalf("dry-run targets missing Mole-compatible cache %q: targets=%#v skipped=%#v", path, res.Targets, res.Skipped)
 		}
 	}
 }
@@ -302,6 +355,17 @@ func cleanResultContains(res CleanResult, path string) bool {
 	path = filepath.Clean(path)
 	for _, target := range res.Targets {
 		if filepath.Clean(target.Path) == path {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanResultCovers(res CleanResult, path string) bool {
+	path = filepath.Clean(path)
+	for _, target := range res.Targets {
+		targetPath := filepath.Clean(target.Path)
+		if targetPath == path || strings.HasPrefix(path, targetPath+string(os.PathSeparator)) {
 			return true
 		}
 	}
