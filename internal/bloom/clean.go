@@ -413,7 +413,6 @@ func defaultCleanRules() []cleanRule {
 		{Label: "Electron cache", Pattern: "~/.cache/electron/*"},
 		{Label: "ESLint cache", Pattern: "~/.cache/eslint/*"},
 		{Label: "Prettier cache", Pattern: "~/.cache/prettier/*"},
-		{Label: "Zsh completion cache", Pattern: "~/.zcompdump*"},
 		{Label: "Git config lock", Pattern: "~/.gitconfig.lock"},
 		{Label: "Oh My Zsh cache", Pattern: "~/.oh-my-zsh/cache/*"},
 	}

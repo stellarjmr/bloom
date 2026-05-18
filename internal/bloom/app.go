@@ -399,9 +399,15 @@ func printCleanResult(out, errOut io.Writer, res CleanResult) {
 		if res.DryRun {
 			marker = "·"
 		}
-		for _, target := range res.Targets {
-			fmt.Fprintf(out, "%s %s  %s\n", marker, target.Label, FormatBytes(target.SizeKB))
-			fmt.Fprintf(out, "   └── %s\n", target.Path)
+		for _, group := range groupedCleanTargets(res.Targets) {
+			fmt.Fprintf(out, "%s %s  %s  (%s)\n", marker, group.Label, FormatBytes(group.SizeKB), cleanItemCountLabel(len(group.Paths)))
+			for i, path := range group.Paths {
+				branch := "├──"
+				if i == len(group.Paths)-1 {
+					branch = "└──"
+				}
+				fmt.Fprintf(out, "   %s %s\n", branch, path)
+			}
 		}
 	}
 	for _, failed := range res.Failed {
@@ -417,6 +423,35 @@ func printCleanResult(out, errOut io.Writer, res CleanResult) {
 	if len(res.Skipped) > 0 {
 		fmt.Fprintf(out, "Skipped %d protected, whitelisted, invalid, or Trash items\n", len(res.Skipped))
 	}
+}
+
+type cleanTargetGroup struct {
+	Label  string
+	SizeKB int64
+	Paths  []string
+}
+
+func groupedCleanTargets(targets []CleanTarget) []cleanTargetGroup {
+	groups := make([]cleanTargetGroup, 0, len(targets))
+	byLabel := map[string]int{}
+	for _, target := range targets {
+		idx, ok := byLabel[target.Label]
+		if !ok {
+			idx = len(groups)
+			byLabel[target.Label] = idx
+			groups = append(groups, cleanTargetGroup{Label: target.Label})
+		}
+		groups[idx].SizeKB += target.SizeKB
+		groups[idx].Paths = append(groups[idx].Paths, target.Path)
+	}
+	return groups
+}
+
+func cleanItemCountLabel(n int) string {
+	if n == 1 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%d items", n)
 }
 
 func (a *App) runList(args []string) int {
@@ -809,12 +844,12 @@ func (a *App) runUninstall(args []string) int {
 	if *dryRun {
 		fmt.Fprintln(a.Out, "Would move the following items to Trash:")
 		summary := BatchUninstall(ctx, runner, targets, true)
-		_, printFailures := a.printUninstallSummary(summary, true)
+		_, printFailures := a.printUninstallSummary(summary, true, true)
 		failures += printFailures
 	} else {
 		fmt.Fprintln(a.Out, "The following items will be moved to Trash:")
 		plan := BatchUninstall(ctx, runner, targets, true)
-		planned, printFailures := a.printUninstallSummary(plan, true)
+		planned, printFailures := a.printUninstallSummary(plan, true, true)
 		failures += printFailures
 		if planned == 0 {
 			if failures > 0 {
@@ -832,7 +867,7 @@ func (a *App) runUninstall(args []string) int {
 
 		fmt.Fprintln(a.Out)
 		summary := BatchUninstall(ctx, runner, targets, false)
-		_, printFailures = a.printUninstallSummary(summary, false)
+		_, printFailures = a.printUninstallSummary(summary, false, false)
 		failures += printFailures
 	}
 
@@ -842,7 +877,7 @@ func (a *App) runUninstall(args []string) int {
 	return 0
 }
 
-func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool) (int, int) {
+func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles bool) (int, int) {
 	processed := 0
 	failures := 0
 	for _, res := range summary.Results {
@@ -860,12 +895,14 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool) (int, int
 			brewNote = "  [brew cask]"
 		}
 		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
-		fileMark := "✓"
-		if dryRun {
-			fileMark = "·"
-		}
-		for _, p := range res.Files {
-			fmt.Fprintf(a.Out, "   %s %s\n", fileMark, p)
+		if showFiles {
+			fileMark := "✓"
+			if dryRun {
+				fileMark = "·"
+			}
+			for _, p := range res.Files {
+				fmt.Fprintf(a.Out, "   %s %s\n", fileMark, p)
+			}
 		}
 		for _, p := range res.Failed {
 			fmt.Fprintf(a.Err, "   ! could not move to Trash %s\n", p)

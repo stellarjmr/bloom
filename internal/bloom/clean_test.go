@@ -260,6 +260,33 @@ func TestRunCleanNeverTargetsHighValueCachesEvenWithoutWhitelist(t *testing.T) {
 	}
 }
 
+func TestRunCleanNeverTargetsZshCompletionCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	zcompdump := filepath.Join(home, ".zcompdump")
+	zcompdumpVersioned := filepath.Join(home, ".zcompdump-host-5.9")
+	dropFile := filepath.Join(home, "Library", "Caches", "DropApp", "data.tmp")
+	for _, path := range []string{zcompdump, zcompdumpVersioned, dropFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	if !cleanResultContains(res, filepath.Dir(dropFile)) {
+		t.Fatalf("dry-run targets missing DropApp: %#v", res.Targets)
+	}
+	for _, path := range []string{zcompdump, zcompdumpVersioned} {
+		if cleanResultContains(res, path) {
+			t.Fatalf("Zsh completion cache %q appeared in targets: %#v", path, res.Targets)
+		}
+	}
+}
+
 func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

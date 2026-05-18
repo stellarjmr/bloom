@@ -105,6 +105,43 @@ func TestRunUpdatePrintsDoneAndSummaryWithoutBlankLine(t *testing.T) {
 	}
 }
 
+func TestPrintCleanResultGroupsTargetsByLabel(t *testing.T) {
+	res := CleanResult{
+		Targets: []CleanTarget{
+			{Label: "User app cache", Path: "/Users/test/Library/Caches/Zed", SizeKB: 1024},
+			{Label: "npm package cache", Path: "/Users/test/.npm/_cacache/tmp", SizeKB: 16},
+			{Label: "User app cache", Path: "/Users/test/Library/Caches/Homebrew", SizeKB: 2048},
+		},
+		Skipped: []CleanSkip{{Path: "/Users/test/Library/Caches/PassKit", Reason: "protected"}},
+		TotalKB: 3096,
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	printCleanResult(&stdout, &stderr, res)
+	out := stdout.String()
+	if strings.Count(out, "✓ User app cache") != 1 {
+		t.Fatalf("User app cache should be grouped once, output = %q", out)
+	}
+	if !strings.Contains(out, "✓ User app cache  3.0M  (2 items)") {
+		t.Fatalf("group header did not include summed size and item count: %q", out)
+	}
+	for _, want := range []string{
+		"   ├── /Users/test/Library/Caches/Zed",
+		"   └── /Users/test/Library/Caches/Homebrew",
+		"✓ npm package cache  16.0K  (1 item)",
+		"Moved 3 items to Trash (3.0M)",
+		"Skipped 1 protected, whitelisted, invalid, or Trash items",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %q", want, out)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunCheckOutputsTSV(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true, "npm": true},
@@ -600,6 +637,51 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("trashed path %q missing: %v", path, err)
 		}
+	}
+}
+
+func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
+	summary := BatchSummary{
+		Results: []UninstallResult{{
+			App:       AppEntry{Name: "Foo"},
+			RemovedKB: 2048,
+			Files: []string{
+				"/Applications/Foo.app",
+				"/Users/test/Library/Containers/com.example.foo",
+			},
+			Failed: []string{"/Users/test/Library/Application Scripts/com.example.foo"},
+		}},
+		TotalRemovedKB: 2048,
+	}
+
+	var previewOut, previewErr bytes.Buffer
+	previewApp := App{Out: &previewOut, Err: &previewErr}
+	processed, failures := previewApp.printUninstallSummary(summary, true, true)
+	if processed != 1 || failures != 0 {
+		t.Fatalf("preview processed, failures = %d, %d; want 1, 0", processed, failures)
+	}
+	if !strings.Contains(previewOut.String(), "   · /Applications/Foo.app") {
+		t.Fatalf("preview output did not include file list: %q", previewOut.String())
+	}
+	if !strings.Contains(previewErr.String(), "could not move to Trash") {
+		t.Fatalf("preview stderr did not include failures: %q", previewErr.String())
+	}
+
+	var resultOut, resultErr bytes.Buffer
+	resultApp := App{Out: &resultOut, Err: &resultErr}
+	processed, failures = resultApp.printUninstallSummary(summary, false, false)
+	if processed != 1 || failures != 0 {
+		t.Fatalf("result processed, failures = %d, %d; want 1, 0", processed, failures)
+	}
+	out := resultOut.String()
+	if strings.Contains(out, "/Applications/Foo.app") || strings.Contains(out, "/Users/test/Library/Containers/com.example.foo") {
+		t.Fatalf("result output repeated file list: %q", out)
+	}
+	if !strings.Contains(out, "✓ Foo") || !strings.Contains(out, "Uninstalled 1 apps, moved 2.0M to Trash") {
+		t.Fatalf("result output missing app line or summary: %q", out)
+	}
+	if !strings.Contains(resultErr.String(), "could not move to Trash") {
+		t.Fatalf("result stderr did not include failures: %q", resultErr.String())
 	}
 }
 
