@@ -904,6 +904,9 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 				fmt.Fprintf(a.Out, "   %s %s\n", fileMark, p)
 			}
 		}
+		if res.StillRunning {
+			fmt.Fprintf(a.Err, "   ! %s may still be running; quit it manually if needed\n", res.App.Name)
+		}
 		for _, p := range res.Failed {
 			fmt.Fprintf(a.Err, "   ! could not move to Trash %s\n", p)
 		}

@@ -86,7 +86,7 @@ The interactive flow lives at menu item 3:
 Per-app cleanup runs in this order so brew can detect and clean its own metadata:
 
 1. Quit the app, unload its `LaunchAgents`.
-2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --zap --force <token>`, then verify with `brew list --cask`.
+2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --zap --force <token>`, then verify with `brew list --cask`. Bloom then moves any remaining curated leftovers to Trash.
 3. Remove the bundle and the matching `~/Library` entries.
 4. Remove the macOS Login Item, unregister the bundle from LaunchServices.
 

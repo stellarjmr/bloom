@@ -452,6 +452,65 @@ func TestFindRelatedPathsIncludesVSCodeInsidersPaths(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsKeepsTokenMatchesOnBoundaries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "TestApp.app")
+
+	wantPaths := []string{
+		appPath,
+		filepath.Join(home, "Library", "Caches", "com.example.TestApp.ShipIt"),
+		filepath.Join(home, "Library", "Containers", "com.example.TestApp.helper"),
+		filepath.Join(home, "Library", "Application Scripts", "TEAM.com.example.TestApp.Extension"),
+		filepath.Join(home, "Library", "Preferences", "ByHost", "com.example.TestApp.ABC123.plist"),
+		filepath.Join(home, "Library", "LaunchAgents", "com.example.TestApp.helper.plist"),
+	}
+	for _, path := range wantPaths {
+		if strings.HasSuffix(path, ".plist") {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("plist"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(home, "Library", "Caches", "com.example.TestApplication.ShipIt"),
+		filepath.Join(home, "Library", "Containers", "com.example.TestApplication"),
+		filepath.Join(home, "Library", "Application Scripts", "TEAM.com.example.TestApplication.Extension"),
+		filepath.Join(home, "Library", "Preferences", "ByHost", "com.example.TestApplication.ABC123.plist"),
+		filepath.Join(home, "Library", "LaunchAgents", "com.example.TestApplication.plist"),
+	} {
+		if strings.HasSuffix(path, ".plist") {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("plist"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "TestApp", BundleID: "com.example.TestApp"})
+	for _, path := range wantPaths {
+		if !containsString(paths, path) {
+			t.Fatalf("paths missing boundary match %q: %#v", path, paths)
+		}
+	}
+	if strings.Contains(strings.Join(paths, "\n"), "TestApplication") {
+		t.Fatalf("matched sibling bundle prefix: %#v", paths)
+	}
+}
+
 func TestLooksLikeBundleIDRequiresReverseDNSComponents(t *testing.T) {
 	valid := []string{
 		"com.example.app",
@@ -495,7 +554,7 @@ func TestBundleDomainPrefixRequiresProductComponent(t *testing.T) {
 	}
 }
 
-func TestStopAppUsesBundleExecutableForProcessKill(t *testing.T) {
+func TestStopAppSendsQuitWithoutKilling(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	oldPoll := stopAppPollInterval
@@ -504,22 +563,38 @@ func TestStopAppUsesBundleExecutableForProcessKill(t *testing.T) {
 
 	appPath := filepath.Join(home, "Applications", "Visual Studio Code.app")
 	writeTestInfoPlist(t, appPath, "com.microsoft.VSCode", "Code")
+	launchDir := filepath.Join(home, "Library", "LaunchAgents")
+	for _, name := range []string{"com.microsoft.VSCode.plist", "com.microsoft.VSCode.helper.plist", "com.microsoft.VSCodeInsiders.plist"} {
+		path := filepath.Join(launchDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("plist"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	r := &processRunner{running: map[string]bool{"Code": true}}
 
-	stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
 
-	if !runnerCallContains(r.calls, `/usr/bin/osascript -e tell application id "com.microsoft.VSCode" to quit`) {
+	if !runnerCallContains(r.calls, "/usr/bin/osascript -e tell application id \"com.microsoft.VSCode\" to quit") {
 		t.Fatalf("osascript quit not called with bundle id: %#v", r.calls)
 	}
-	if !runnerCallContains(r.calls, "/usr/bin/pkill -x Code") {
-		t.Fatalf("pkill not called with CFBundleExecutable: %#v", r.calls)
+	if !stillRunning {
+		t.Fatalf("stopApp should report the app still running when graceful quit does not exit: %#v", r.calls)
 	}
-	if runnerCallContains(r.calls, "/usr/bin/pkill -x Visual Studio Code") {
-		t.Fatalf("pkill used display name instead of executable: %#v", r.calls)
+	if runnerCallContains(r.calls, "/usr/bin/pkill") {
+		t.Fatalf("stopApp should not send SIGTERM/SIGKILL: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, filepath.Join(launchDir, "com.microsoft.VSCode.plist")) || !runnerCallContains(r.calls, filepath.Join(launchDir, "com.microsoft.VSCode.helper.plist")) {
+		t.Fatalf("matching LaunchAgents were not unloaded: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "com.microsoft.VSCodeInsiders.plist") {
+		t.Fatalf("sibling bundle LaunchAgent was unloaded: %#v", r.calls)
 	}
 }
 
-func TestStopAppFallsBackToAppNameWhenExecutableMissing(t *testing.T) {
+func TestStopAppFallsBackToAppNameForQuitWhenBundleIDMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	oldPoll := stopAppPollInterval
@@ -527,9 +602,15 @@ func TestStopAppFallsBackToAppNameWhenExecutableMissing(t *testing.T) {
 	t.Cleanup(func() { stopAppPollInterval = oldPoll })
 
 	r := &processRunner{running: map[string]bool{"Foo": true}}
-	stopApp(context.Background(), r, AppEntry{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo"})
-	if !runnerCallContains(r.calls, "/usr/bin/pkill -x Foo") {
-		t.Fatalf("pkill did not fall back to app name: %#v", r.calls)
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo"})
+	if !runnerCallContains(r.calls, "/usr/bin/osascript -e tell application \"Foo\" to quit") {
+		t.Fatalf("osascript quit did not fall back to app name: %#v", r.calls)
+	}
+	if !stillRunning {
+		t.Fatalf("stopApp should report the app still running when graceful quit does not exit: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/usr/bin/pkill") {
+		t.Fatalf("stopApp should not send SIGTERM/SIGKILL: %#v", r.calls)
 	}
 }
 
@@ -550,9 +631,6 @@ func (r *processRunner) Run(_ context.Context, name string, args ...string) Comm
 			return CommandOutput{Stdout: "123\n"}
 		}
 		return CommandOutput{Err: errors.New("not running")}
-	}
-	if name == "/usr/bin/pkill" && len(args) > 0 {
-		r.running[args[len(args)-1]] = false
 	}
 	return CommandOutput{}
 }
@@ -640,6 +718,31 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	}
 }
 
+func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appPath := filepath.Join(home, "Applications", "foo.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string]CommandOutput{
+			"brew list --cask": {Stdout: "foo\n"},
+		},
+	}
+
+	res := UninstallApp(context.Background(), r, AppEntry{Path: appPath, Name: "foo", BundleID: "com.example.foo"}, false)
+	if res.Err != nil {
+		t.Fatalf("uninstall error = %v", res.Err)
+	}
+	if !runnerCallContains(r.calls, "brew uninstall --cask --zap --force foo") {
+		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	}
+}
+
 func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	summary := BatchSummary{
 		Results: []UninstallResult{{
@@ -682,6 +785,27 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(resultErr.String(), "could not move to Trash") {
 		t.Fatalf("result stderr did not include failures: %q", resultErr.String())
+	}
+}
+
+func TestPrintUninstallSummaryWarnsWhenAppStillRunning(t *testing.T) {
+	summary := BatchSummary{
+		Results: []UninstallResult{{
+			App:          AppEntry{Name: "Foo"},
+			Files:        []string{"/Applications/Foo.app"},
+			StillRunning: true,
+		}},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := App{Out: &stdout, Err: &stderr}
+	processed, failures := app.printUninstallSummary(summary, false, false)
+	if processed != 1 || failures != 0 {
+		t.Fatalf("processed, failures = %d, %d; want 1, 0", processed, failures)
+	}
+	if !strings.Contains(stderr.String(), "Foo may still be running") {
+		t.Fatalf("stderr missing still-running warning: %q", stderr.String())
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Uninstall scanning and removal for macOS .app bundles.
@@ -33,12 +35,13 @@ type AppEntry struct {
 
 // UninstallResult captures the outcome for a single app removal.
 type UninstallResult struct {
-	App         AppEntry
-	RemovedKB   int64
-	Files       []string
-	Failed      []string
-	Err         error
-	BrewRemoved bool
+	App          AppEntry
+	RemovedKB    int64
+	Files        []string
+	Failed       []string
+	Err          error
+	BrewRemoved  bool
+	StillRunning bool
 }
 
 // BatchSummary aggregates per-app results plus shared post-batch effects.
@@ -476,8 +479,8 @@ func matchVSCodePaths(app AppEntry, out *[]string) {
 	add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode.ShipIt"))
 }
 
-// matchInDir scans dir for entries containing token (case-insensitive) and
-// appends matching absolute paths.
+// matchInDir scans dir for entries containing token on filename boundaries
+// (case-insensitive) and appends matching absolute paths.
 func matchInDir(dir, token string, out *[]string) {
 	if token == "" {
 		return
@@ -486,16 +489,60 @@ func matchInDir(dir, token string, out *[]string) {
 	if err != nil {
 		return
 	}
-	lowTok := strings.ToLower(token)
 	for _, entry := range entries {
 		name := entry.Name()
 		if name == "." || name == ".." {
 			continue
 		}
-		if strings.Contains(strings.ToLower(name), lowTok) {
+		if nameContainsTokenOnBoundary(name, token) {
 			*out = append(*out, filepath.Join(dir, name))
 		}
 	}
+}
+
+func nameContainsTokenOnBoundary(name, token string) bool {
+	if token == "" {
+		return false
+	}
+	name = strings.ToLower(name)
+	token = strings.ToLower(token)
+	for start := 0; start < len(name); {
+		idx := strings.Index(name[start:], token)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(token)
+		if tokenBoundaryBefore(name, idx) && tokenBoundaryAfter(name, end) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(name[idx:])
+		if size <= 0 {
+			return false
+		}
+		start = idx + size
+	}
+	return false
+}
+
+func tokenBoundaryBefore(s string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:idx])
+	return isTokenBoundary(r)
+}
+
+func tokenBoundaryAfter(s string, idx int) bool {
+	if idx >= len(s) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s[idx:])
+	return isTokenBoundary(r)
+}
+
+func isTokenBoundary(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
 func matchGroupContainers(app AppEntry, out *[]string) {
@@ -665,7 +712,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	}
 
 	if !dryRun {
-		stopApp(ctx, runner, app)
+		res.StillRunning = stopApp(ctx, runner, app)
 	}
 
 	cask := detectHomebrewCask(ctx, runner, app)
@@ -851,53 +898,62 @@ func urlPathEscape(p string) string {
 	return r.Replace(p)
 }
 
-const (
-	stopAppQuitPolls = 10
-	stopAppKillPolls = 5
-)
+const stopAppQuitPolls = 10
 
 var stopAppPollInterval = 100 * time.Millisecond
 
-func stopApp(ctx context.Context, runner Runner, app AppEntry) {
+func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 	matchName := readBundleExecutable(app.Path)
 	if matchName == "" {
 		matchName = app.Name
 	}
 
 	running := processRunning(ctx, runner, matchName)
-	if running && app.BundleID != "" {
-		_ = runner.Run(ctx, "/usr/bin/osascript", "-e",
-			fmt.Sprintf(`tell application id "%s" to quit`, app.BundleID))
+	if running {
+		if script := quitAppScript(app); script != "" {
+			_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
+		}
 		running = !waitForProcessExit(ctx, runner, matchName, stopAppQuitPolls)
-	}
-	if running {
-		_ = runner.Run(ctx, "/usr/bin/pkill", "-x", matchName)
-		running = !waitForProcessExit(ctx, runner, matchName, stopAppKillPolls)
-	}
-	if running {
-		_ = runner.Run(ctx, "/usr/bin/pkill", "-9", "-x", matchName)
-		_ = waitForProcessExit(ctx, runner, matchName, stopAppKillPolls)
 	}
 
 	if app.BundleID == "" {
-		return
+		return running
 	}
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		return
+		return running
 	}
 	dir := filepath.Join(home, "Library", "LaunchAgents")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return running
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, app.BundleID) || !strings.HasSuffix(name, ".plist") {
+		if !launchAgentNameMatchesBundleID(name, app.BundleID) {
 			continue
 		}
 		_ = runner.Run(ctx, "/bin/launchctl", "unload", filepath.Join(dir, name))
 	}
+	return running
+}
+
+func quitAppScript(app AppEntry) string {
+	if looksLikeBundleID(app.BundleID) {
+		return fmt.Sprintf("tell application id %q to quit", app.BundleID)
+	}
+	if app.Name != "" {
+		return fmt.Sprintf("tell application %q to quit", app.Name)
+	}
+	return ""
+}
+
+func launchAgentNameMatchesBundleID(name, bundleID string) bool {
+	if !looksLikeBundleID(bundleID) || !strings.HasSuffix(name, ".plist") {
+		return false
+	}
+	stem := strings.TrimSuffix(name, ".plist")
+	return stem == bundleID || strings.HasPrefix(stem, bundleID+".")
 }
 
 func processRunning(ctx context.Context, runner Runner, name string) bool {
