@@ -554,7 +554,7 @@ func TestBundleDomainPrefixRequiresProductComponent(t *testing.T) {
 	}
 }
 
-func TestStopAppSendsQuitWithoutKilling(t *testing.T) {
+func TestStopAppSendsQuitThenTerminatesVerifiedBundleProcess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	oldPoll := stopAppPollInterval
@@ -573,24 +573,95 @@ func TestStopAppSendsQuitWithoutKilling(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := &processRunner{running: map[string]bool{"Code": true}}
+	r := &processRunner{
+		pids: map[string][]string{"Code": []string{"123"}},
+		processPaths: map[string]string{
+			"123": filepath.Join(appPath, "Contents", "MacOS", "Code"),
+		},
+	}
 
 	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
 
 	if !runnerCallContains(r.calls, "/usr/bin/osascript -e tell application id \"com.microsoft.VSCode\" to quit") {
 		t.Fatalf("osascript quit not called with bundle id: %#v", r.calls)
 	}
-	if !stillRunning {
-		t.Fatalf("stopApp should report the app still running when graceful quit does not exit: %#v", r.calls)
+	if stillRunning {
+		t.Fatalf("stopApp should force-terminate the verified app process: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/bin/kill -TERM 123") {
+		t.Fatalf("stopApp did not send SIGTERM to verified app process: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/bin/kill -KILL") {
+		t.Fatalf("stopApp sent SIGKILL even though SIGTERM exited the app: %#v", r.calls)
 	}
 	if runnerCallContains(r.calls, "/usr/bin/pkill") {
-		t.Fatalf("stopApp should not send SIGTERM/SIGKILL: %#v", r.calls)
+		t.Fatalf("stopApp should not use name-only pkill: %#v", r.calls)
 	}
 	if !runnerCallContains(r.calls, filepath.Join(launchDir, "com.microsoft.VSCode.plist")) || !runnerCallContains(r.calls, filepath.Join(launchDir, "com.microsoft.VSCode.helper.plist")) {
 		t.Fatalf("matching LaunchAgents were not unloaded: %#v", r.calls)
 	}
 	if runnerCallContains(r.calls, "com.microsoft.VSCodeInsiders.plist") {
 		t.Fatalf("sibling bundle LaunchAgent was unloaded: %#v", r.calls)
+	}
+}
+
+func TestStopAppDoesNotKillSameNameProcessOutsideBundle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	appPath := filepath.Join(home, "Applications", "Visual Studio Code.app")
+	writeTestInfoPlist(t, appPath, "com.microsoft.VSCode", "Code")
+	r := &processRunner{
+		pids: map[string][]string{"Code": []string{"123", "456"}},
+		processPaths: map[string]string{
+			"123": filepath.Join(appPath, "Contents", "MacOS", "Code"),
+			"456": filepath.Join(home, "Other.app", "Contents", "MacOS", "Code"),
+		},
+	}
+
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+
+	if stillRunning {
+		t.Fatalf("stopApp should not treat an unrelated same-name process as the target app: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/bin/kill -TERM 123") {
+		t.Fatalf("stopApp did not terminate the verified target process: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/bin/kill -TERM 456") || runnerCallContains(r.calls, "/bin/kill -KILL 456") {
+		t.Fatalf("stopApp killed a same-name process outside the target bundle: %#v", r.calls)
+	}
+}
+
+func TestStopAppEscalatesToSIGKILLWhenSIGTERMFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	r := &processRunner{
+		pids: map[string][]string{"Foo": []string{"123"}},
+		processPaths: map[string]string{
+			"123": filepath.Join(appPath, "Contents", "MacOS", "Foo"),
+		},
+		ignoreTERM: map[string]bool{"123": true},
+	}
+
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+
+	if stillRunning {
+		t.Fatalf("stopApp should report exited after SIGKILL succeeds: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/bin/kill -TERM 123") {
+		t.Fatalf("stopApp did not try SIGTERM before SIGKILL: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/bin/kill -KILL 123") {
+		t.Fatalf("stopApp did not escalate to SIGKILL: %#v", r.calls)
 	}
 }
 
@@ -610,13 +681,20 @@ func TestStopAppFallsBackToAppNameForQuitWhenBundleIDMissing(t *testing.T) {
 		t.Fatalf("stopApp should report the app still running when graceful quit does not exit: %#v", r.calls)
 	}
 	if runnerCallContains(r.calls, "/usr/bin/pkill") {
-		t.Fatalf("stopApp should not send SIGTERM/SIGKILL: %#v", r.calls)
+		t.Fatalf("stopApp should not use name-only pkill: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/bin/kill") {
+		t.Fatalf("stopApp should not kill without verifying the process path: %#v", r.calls)
 	}
 }
 
 type processRunner struct {
-	running map[string]bool
-	calls   []string
+	running      map[string]bool
+	pids         map[string][]string
+	processPaths map[string]string
+	ignoreTERM   map[string]bool
+	exited       map[string]bool
+	calls        []string
 }
 
 func (r *processRunner) LookPath(file string) (string, error) {
@@ -627,10 +705,55 @@ func (r *processRunner) Run(_ context.Context, name string, args ...string) Comm
 	call := strings.Join(append([]string{name}, args...), " ")
 	r.calls = append(r.calls, call)
 	if name == "/usr/bin/pgrep" {
-		if len(args) > 0 && r.running[args[len(args)-1]] {
+		if len(args) == 0 {
+			return CommandOutput{Err: errors.New("missing process name")}
+		}
+		matchName := args[len(args)-1]
+		if pids, ok := r.pids[matchName]; ok {
+			var live []string
+			for _, pid := range pids {
+				if !r.exited[pid] {
+					live = append(live, pid)
+				}
+			}
+			if len(live) > 0 {
+				return CommandOutput{Stdout: strings.Join(live, "\n") + "\n"}
+			}
+			return CommandOutput{Err: errors.New("not running")}
+		}
+		if r.running[matchName] {
 			return CommandOutput{Stdout: "123\n"}
 		}
 		return CommandOutput{Err: errors.New("not running")}
+	}
+	if name == "/bin/ps" {
+		pid := ""
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "-p" {
+				pid = args[i+1]
+				break
+			}
+		}
+		if pid == "" || r.exited[pid] {
+			return CommandOutput{Err: errors.New("not running")}
+		}
+		if path := r.processPaths[pid]; path != "" {
+			return CommandOutput{Stdout: path + "\n"}
+		}
+		return CommandOutput{Err: errors.New("unknown process")}
+	}
+	if name == "/bin/kill" {
+		if len(args) > 0 {
+			pid := args[len(args)-1]
+			if args[0] == "-TERM" && r.ignoreTERM[pid] {
+				return CommandOutput{}
+			}
+			if r.exited == nil {
+				r.exited = map[string]bool{}
+			}
+			r.exited[pid] = true
+		}
+		return CommandOutput{}
 	}
 	return CommandOutput{}
 }

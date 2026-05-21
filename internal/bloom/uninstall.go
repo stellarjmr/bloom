@@ -899,6 +899,7 @@ func urlPathEscape(p string) string {
 }
 
 const stopAppQuitPolls = 10
+const stopAppForcePolls = 5
 
 var stopAppPollInterval = 100 * time.Millisecond
 
@@ -916,17 +917,26 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 		running = !waitForProcessExit(ctx, runner, matchName, stopAppQuitPolls)
 	}
 
+	unloadMatchingLaunchAgents(ctx, runner, app)
+
+	if running {
+		running = !forceQuitAppProcesses(ctx, runner, app, matchName)
+	}
+	return running
+}
+
+func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry) {
 	if app.BundleID == "" {
-		return running
+		return
 	}
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		return running
+		return
 	}
 	dir := filepath.Join(home, "Library", "LaunchAgents")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return running
+		return
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -935,7 +945,123 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 		}
 		_ = runner.Run(ctx, "/bin/launchctl", "unload", filepath.Join(dir, name))
 	}
-	return running
+}
+
+func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
+	pids := matchingAppProcessIDs(ctx, runner, app, matchName)
+	if len(pids) == 0 {
+		return !processRunning(ctx, runner, matchName)
+	}
+	for _, pid := range pids {
+		_ = runner.Run(ctx, "/bin/kill", "-TERM", pid)
+	}
+	if waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls) {
+		return true
+	}
+
+	pids = matchingAppProcessIDs(ctx, runner, app, matchName)
+	if len(pids) == 0 {
+		return true
+	}
+	for _, pid := range pids {
+		_ = runner.Run(ctx, "/bin/kill", "-KILL", pid)
+	}
+	return waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls)
+}
+
+func waitForMatchedAppProcessesExit(ctx context.Context, runner Runner, app AppEntry, matchName string, polls int) bool {
+	for i := 0; i < polls; i++ {
+		if len(matchingAppProcessIDs(ctx, runner, app, matchName)) == 0 {
+			return true
+		}
+		if stopAppPollInterval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(stopAppPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return true
+		case <-timer.C:
+		}
+	}
+	return len(matchingAppProcessIDs(ctx, runner, app, matchName)) == 0
+}
+
+func matchingAppProcessIDs(ctx context.Context, runner Runner, app AppEntry, matchName string) []string {
+	if matchName == "" {
+		return nil
+	}
+	bundlePaths := appBundlePathCandidates(app.Path)
+	if len(bundlePaths) == 0 {
+		return nil
+	}
+	var matched []string
+	for _, pid := range processIDs(ctx, runner, matchName) {
+		processPath := processExecutablePath(ctx, runner, pid)
+		if processPathMatchesAppBundle(processPath, matchName, bundlePaths) {
+			matched = append(matched, pid)
+		}
+	}
+	return matched
+}
+
+func appBundlePathCandidates(appPath string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	addPath := func(path string) {
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		if !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	addPath(appPath)
+	addPath(symlinkTargetPath(appPath))
+	if resolved, err := filepath.EvalSymlinks(appPath); err == nil {
+		addPath(resolved)
+	}
+	return paths
+}
+
+func processExecutablePath(ctx context.Context, runner Runner, pid string) string {
+	out := runner.Run(ctx, "/bin/ps", "-ww", "-p", pid, "-o", "comm=")
+	if out.Err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out.Stdout, "\n") {
+		if path := strings.TrimSpace(line); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func processPathMatchesAppBundle(processPath, matchName string, bundlePaths []string) bool {
+	if processPath == "" || matchName == "" || !filepath.IsAbs(processPath) {
+		return false
+	}
+	processPaths := []string{filepath.Clean(processPath)}
+	if resolved, err := filepath.EvalSymlinks(processPath); err == nil && resolved != "" {
+		processPaths = append(processPaths, filepath.Clean(resolved))
+	}
+	seen := map[string]bool{}
+	for _, processPath := range processPaths {
+		if seen[processPath] {
+			continue
+		}
+		seen[processPath] = true
+		for _, bundlePath := range bundlePaths {
+			expected := filepath.Join(bundlePath, "Contents", "MacOS", matchName)
+			if processPath == filepath.Clean(expected) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func quitAppScript(app AppEntry) string {
@@ -957,11 +1083,36 @@ func launchAgentNameMatchesBundleID(name, bundleID string) bool {
 }
 
 func processRunning(ctx context.Context, runner Runner, name string) bool {
+	return len(processIDs(ctx, runner, name)) > 0
+}
+
+func processIDs(ctx context.Context, runner Runner, name string) []string {
 	if name == "" {
-		return false
+		return nil
 	}
 	out := runner.Run(ctx, "/usr/bin/pgrep", "-x", name)
-	return out.Err == nil && strings.TrimSpace(out.Stdout) != ""
+	if out.Err != nil {
+		return nil
+	}
+	var pids []string
+	for _, field := range strings.Fields(out.Stdout) {
+		if looksLikePID(field) {
+			pids = append(pids, field)
+		}
+	}
+	return pids
+}
+
+func looksLikePID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func waitForProcessExit(ctx context.Context, runner Runner, name string, polls int) bool {
