@@ -234,12 +234,6 @@ func TestReferenceTokenMatchingAvoidsSubstringFalsePositives(t *testing.T) {
 	if containsAppPathReference(`<string>/Applications/Foo.app.backup</string>`, appPath) {
 		t.Fatal("app path substring was treated as a reference")
 	}
-	if !containsBundleIDToken("Bundle Identifier = com.example.foo\n", "com.example.foo") {
-		t.Fatal("exact bundle id token was not matched")
-	}
-	if containsBundleIDToken("Bundle Identifier = com.example.foo.helper\n", "com.example.foo") {
-		t.Fatal("bundle id prefix was treated as exact token")
-	}
 }
 
 func TestRunUpdatePackageFilterRunsSelectedTaskPackage(t *testing.T) {
@@ -1012,20 +1006,25 @@ func TestUninstallAppSkipsPostRemovalSideEffectsWhenBundleRemains(t *testing.T) 
 	}
 }
 
-func TestDetectBackgroundItemLeftoversMatchesBundleID(t *testing.T) {
-	r := &recordingRunner{
-		paths: map[string]bool{"sfltool": true},
-		outputs: map[string]CommandOutput{
-			"/bin/sfltool dumpbtm": {Stdout: "Bundle Identifier = com.example.foo\n"},
-		},
+func TestBatchUninstallDoesNotQueryBackgroundTaskManagement(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	r := &recordingRunner{paths: map[string]bool{"sfltool": true}, outputs: map[string]CommandOutput{}}
+	summary := BatchUninstall(context.Background(), r, []AppEntry{{
+		Path:     appPath,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	}}, false)
+
+	if len(summary.Results) != 1 || summary.Results[0].Err != nil {
+		t.Fatalf("uninstall summary = %#v", summary.Results)
 	}
-	got := detectBackgroundItemLeftovers(context.Background(), r, []AppEntry{
-		{Name: "Foo", BundleID: "com.example.foo"},
-		{Name: "Bar", BundleID: "com.example.bar"},
-	})
-	want := []string{"Foo"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("background leftovers = %#v, want %#v", got, want)
+	if runnerCallContains(r.calls, "sfltool") {
+		t.Fatalf("uninstall queried Background Task Management: %#v", r.calls)
 	}
 }
 
@@ -1155,30 +1154,6 @@ func TestPrintUninstallSummaryWarnsWhenAppStillRunning(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Foo may still be running") {
 		t.Fatalf("stderr missing still-running warning: %q", stderr.String())
-	}
-}
-
-func TestPrintUninstallSummaryWarnsWhenBackgroundItemsRemain(t *testing.T) {
-	summary := BatchSummary{
-		Results: []UninstallResult{{
-			App:   AppEntry{Name: "Foo"},
-			Files: []string{"/Applications/Foo.app"},
-		}},
-		BackgroundItems: []string{"Foo"},
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	app := App{Out: &stdout, Err: &stderr}
-	processed, failures := app.printUninstallSummary(summary, false, false)
-	if processed != 1 || failures != 0 {
-		t.Fatalf("processed, failures = %d, %d; want 1, 0", processed, failures)
-	}
-	if !strings.Contains(stderr.String(), "background items still registered: Foo") {
-		t.Fatalf("stderr missing background item warning: %q", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "System Settings > General > Login Items & Extensions") {
-		t.Fatalf("stderr missing manual clear guidance: %q", stderr.String())
 	}
 }
 

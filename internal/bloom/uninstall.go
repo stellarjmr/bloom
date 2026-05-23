@@ -47,10 +47,9 @@ type UninstallResult struct {
 
 // BatchSummary aggregates per-app results plus shared post-batch effects.
 type BatchSummary struct {
-	Results         []UninstallResult
-	TotalRemovedKB  int64
-	BrewAutoremove  bool
-	BackgroundItems []string
+	Results        []UninstallResult
+	TotalRemovedKB int64
+	BrewAutoremove bool
 }
 
 var defaultAppDirs = []string{
@@ -921,77 +920,7 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		out := runner.Run(ctx, "brew", "autoremove")
 		sum.BrewAutoremove = out.Err == nil
 	}
-	sum.BackgroundItems = detectBackgroundItemLeftovers(ctx, runner, successfulApps)
 	return sum
-}
-
-func detectBackgroundItemLeftovers(ctx context.Context, runner Runner, apps []AppEntry) []string {
-	if len(apps) == 0 {
-		return nil
-	}
-	sfltool, err := runner.LookPath("sfltool")
-	if err != nil || sfltool == "" {
-		return nil
-	}
-	out := runner.Run(ctx, sfltool, "dumpbtm")
-	if out.Err != nil || out.Stdout == "" {
-		return nil
-	}
-	seen := map[string]bool{}
-	warnings := []string{}
-	for _, app := range apps {
-		if app.BundleID == "" || seen[app.Name] {
-			continue
-		}
-		if containsBundleIDToken(out.Stdout, app.BundleID) {
-			seen[app.Name] = true
-			warnings = append(warnings, app.Name)
-		}
-	}
-	return warnings
-}
-
-func containsBundleIDToken(text, bundleID string) bool {
-	if bundleID == "" {
-		return false
-	}
-	for start := 0; start < len(text); {
-		idx := strings.Index(text[start:], bundleID)
-		if idx < 0 {
-			return false
-		}
-		idx += start
-		end := idx + len(bundleID)
-		if bundleIDBoundaryBefore(text, idx) && bundleIDBoundaryAfter(text, end) {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(text[idx:])
-		if size <= 0 {
-			return false
-		}
-		start = idx + size
-	}
-	return false
-}
-
-func bundleIDBoundaryBefore(s string, idx int) bool {
-	if idx <= 0 {
-		return true
-	}
-	r, _ := utf8.DecodeLastRuneInString(s[:idx])
-	return isBundleIDBoundary(r)
-}
-
-func bundleIDBoundaryAfter(s string, idx int) bool {
-	if idx >= len(s) {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(s[idx:])
-	return isBundleIDBoundary(r)
-}
-
-func isBundleIDBoundary(r rune) bool {
-	return !isBundleIDAlphaNum(r) && r != '.' && r != '-'
 }
 
 // removeLoginItem deletes a macOS Login Item entry whose name matches the app.
