@@ -1208,3 +1208,33 @@ func TestMovePathToTrashStubbornNeverPermanentDeletesOnTrashFailure(t *testing.T
 		}
 	}
 }
+
+func TestMovePathToTrashDoesNotUseInteractiveHelpers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", "")
+	trashFile := filepath.Join(home, ".Trash")
+	if err := os.WriteFile(trashFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "target")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &recordingRunner{
+		paths:   map[string]bool{"trash": true},
+		outputs: map[string]CommandOutput{"trash " + target: {}},
+	}
+
+	if err := movePathToTrash(context.Background(), r, target); err == nil {
+		t.Fatal("movePathToTrash succeeded with invalid Trash directory")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target should remain after Trash failure: %v", err)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, "trash ") || strings.Contains(call, "/usr/bin/osascript") {
+			t.Fatalf("interactive Trash helper was used: calls = %#v", r.calls)
+		}
+	}
+}

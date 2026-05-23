@@ -160,7 +160,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Anaconda package metadata/tarball cache", Pattern: "~/anaconda3/pkgs", Category: "package_manager"},
 		{Label: "Kubernetes client cache", Pattern: "~/.kube/cache/*", Category: "package_manager"},
 		{Label: "AWS CLI cache", Pattern: "~/.aws/cli/cache/*", Category: "package_manager"},
-		{Label: "Google Cloud CLI logs", Pattern: "~/.config/gcloud/logs/*", Category: "package_manager"},
 		{Label: "Azure CLI logs", Pattern: "~/.azure/logs/*", Category: "package_manager"},
 		{Label: "Terraform plugin/module cache", Pattern: "~/.cache/terraform/*", Category: "package_manager"},
 		{Label: "Prisma cache", Pattern: "~/.cache/prisma/*", Category: "package_manager"},
@@ -848,6 +847,9 @@ func shouldProtectCleanPath(path string) bool {
 	if isTrashCleanPath(p) {
 		return true
 	}
+	if isHomeConfigPath(p) {
+		return true
+	}
 	lower := strings.ToLower(p)
 	keywords := []string{
 		"systemsettings", "system settings", "systempreferences", "system preferences",
@@ -877,6 +879,16 @@ func shouldProtectCleanPath(path string) bool {
 		}
 	}
 	return shouldProtectCleanData(filepath.Base(p))
+}
+
+func isHomeConfigPath(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	config := filepath.Join(home, ".config")
+	path = filepath.Clean(path)
+	return path == config || strings.HasPrefix(path, config+string(os.PathSeparator))
 }
 
 func cleanPathContainsProtectedComponent(path string) bool {
@@ -1216,20 +1228,6 @@ func movePathToTrash(ctx context.Context, runner Runner, path string) error {
 	}
 	if testTrash := os.Getenv("BLOOM_TEST_TRASH_DIR"); testTrash != "" {
 		return movePathIntoTrashDir(path, testTrash)
-	}
-	if _, err := runner.LookPath("trash"); err == nil {
-		if out := runner.Run(ctx, "trash", path); out.Err == nil {
-			return nil
-		}
-	}
-	if out := runner.Run(ctx, "/usr/bin/osascript",
-		"-e", "on run argv",
-		"-e", "set p to POSIX file (item 1 of argv)",
-		"-e", "tell application \"Finder\" to delete p",
-		"-e", "end run",
-		path,
-	); out.Err == nil {
-		return nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

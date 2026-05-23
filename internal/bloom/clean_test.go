@@ -84,6 +84,8 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		filepath.Join(home, "Library", "Containers", "com.dropbox.DropboxMacUpdate", "Data", "Documents", "state.db"),
 		filepath.Join(home, "Library", "Containers", "com.microsoft.OneDrive-mac", "Data", "Documents", "state.db"),
 		filepath.Join(home, "Library", "Containers", "com.lmstudio.lmstudio", "Data", "models", "model.gguf"),
+		filepath.Join(home, ".config", "gcloud", "logs", "gcloud.log"),
+		filepath.Join(home, ".config", "tool", "settings.json"),
 		filepath.Join(home, "Pictures", "Photos Library.photoslibrary", "database", "Photos.sqlite"),
 	}
 
@@ -301,7 +303,6 @@ func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
 		filepath.Join(home, ".rbenv", "cache", "ruby-3.3.0.tar.gz"),
 		filepath.Join(home, ".kube", "cache", "discovery", "api.json"),
 		filepath.Join(home, ".aws", "cli", "cache", "session.json"),
-		filepath.Join(home, ".config", "gcloud", "logs", "gcloud.log"),
 		filepath.Join(home, ".azure", "logs", "az.log"),
 		filepath.Join(home, ".cache", "terraform", "plugin.zip"),
 		filepath.Join(home, ".cache", "prisma", "engine.gz"),
@@ -329,6 +330,31 @@ func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
 		if !cleanResultCovers(res, path) {
 			t.Fatalf("dry-run targets missing Mole-compatible cache %q: targets=%#v skipped=%#v", path, res.Targets, res.Skipped)
 		}
+	}
+}
+
+func TestRunCleanNeverTargetsDotConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configFile := filepath.Join(home, ".config", "gcloud", "logs", "gcloud.log")
+	dropFile := filepath.Join(home, "Library", "Caches", "DropApp", "data.tmp")
+	for _, path := range []string{configFile, dropFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	if !cleanResultContains(res, filepath.Dir(dropFile)) {
+		t.Fatalf("dry-run targets missing DropApp: %#v", res.Targets)
+	}
+	if cleanResultCovers(res, configFile) || cleanResultContains(res, filepath.Dir(configFile)) {
+		t.Fatalf("~/.config path appeared in clean targets: targets=%#v skipped=%#v", res.Targets, res.Skipped)
 	}
 }
 
