@@ -885,32 +885,55 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	}
 }
 
-func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
+func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	appPath := filepath.Join(home, ".config", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+	if containsString(paths, appPath) {
+		t.Fatalf("FindRelatedPaths included ~/.config path: %#v", paths)
+	}
+}
+
+func TestUninstallAppUsesBrewCaskWithoutZap(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
 
 	appPath := filepath.Join(home, "Applications", "foo.app")
-	if err := os.MkdirAll(appPath, 0o755); err != nil {
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	configPath := filepath.Join(home, ".config", "foo", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r := &recordingRunner{
-		paths: map[string]bool{"brew": true},
-		outputs: map[string]CommandOutput{
-			"brew list --cask": {Stdout: "foo\n"},
-		},
+	if err := os.WriteFile(configPath, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &brewCaskUninstallRunner{
+		appPath:              appPath,
+		uninstallRemovePaths: []string{appPath},
+		zapRemovePaths:       []string{filepath.Dir(configPath)},
 	}
 
 	res := UninstallApp(context.Background(), r, AppEntry{Path: appPath, Name: "foo", BundleID: "com.example.foo"}, false)
 	if res.Err != nil {
 		t.Fatalf("uninstall error = %v", res.Err)
 	}
-	if !runnerCallContains(r.calls, "brew uninstall --cask --zap --force foo") {
-		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	if !runnerCallContains(r.calls, "brew uninstall --cask --force foo") {
+		t.Fatalf("brew uninstall without zap was not called: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "--zap") {
+		t.Fatalf("brew uninstall used zap: %#v", r.calls)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("~/.config file should remain after uninstall: %v", err)
 	}
 }
 
-func TestUninstallAppKeepsPlannedStatsWhenBrewZapRemovesPaths(t *testing.T) {
+func TestUninstallAppKeepsPlannedStatsWhenBrewUninstallRemovesPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
@@ -928,9 +951,9 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewZapRemovesPaths(t *testing.T) {
 		}
 	}
 
-	r := &brewZapRemovesPathsRunner{
-		appPath:     appPath,
-		removePaths: []string{appPath, cachePath},
+	r := &brewCaskUninstallRunner{
+		appPath:              appPath,
+		uninstallRemovePaths: []string{appPath, cachePath},
 	}
 	res := UninstallApp(context.Background(), r, AppEntry{
 		Path:     appPath,
@@ -945,17 +968,20 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewZapRemovesPaths(t *testing.T) {
 	}
 	for _, path := range []string{appPath, cachePath} {
 		if !containsString(res.Files, path) {
-			t.Fatalf("result files missing %q after brew zap removed it: %#v", path, res.Files)
+			t.Fatalf("result files missing %q after brew uninstall removed it: %#v", path, res.Files)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("original path %q still exists or stat failed unexpectedly: %v", path, err)
 		}
 	}
 	if res.RemovedKB == 0 {
-		t.Fatalf("removed size = 0, want planned size from paths removed by brew zap")
+		t.Fatalf("removed size = 0, want planned size from paths removed by brew uninstall")
 	}
-	if !runnerCallContains(r.calls, "brew uninstall --cask --zap --force foo") {
-		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	if !runnerCallContains(r.calls, "brew uninstall --cask --force foo") {
+		t.Fatalf("brew uninstall without zap was not called: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "--zap") {
+		t.Fatalf("brew uninstall used zap: %#v", r.calls)
 	}
 }
 
@@ -1048,21 +1074,22 @@ func TestRemoveAppsFromDockMatchesBundleIDAcrossDockArrays(t *testing.T) {
 	}
 }
 
-type brewZapRemovesPathsRunner struct {
-	appPath     string
-	removePaths []string
-	uninstalled bool
-	calls       []string
+type brewCaskUninstallRunner struct {
+	appPath              string
+	uninstallRemovePaths []string
+	zapRemovePaths       []string
+	uninstalled          bool
+	calls                []string
 }
 
-func (r *brewZapRemovesPathsRunner) LookPath(file string) (string, error) {
+func (r *brewCaskUninstallRunner) LookPath(file string) (string, error) {
 	if file == "brew" {
 		return "/bin/brew", nil
 	}
 	return "", errNotFound
 }
 
-func (r *brewZapRemovesPathsRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+func (r *brewCaskUninstallRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
 	call := strings.Join(append([]string{name}, args...), " ")
 	r.calls = append(r.calls, call)
 	switch call {
@@ -1073,8 +1100,17 @@ func (r *brewZapRemovesPathsRunner) Run(_ context.Context, name string, args ...
 		return CommandOutput{Stdout: "foo\n"}
 	case "brew info --cask foo":
 		return CommandOutput{Stdout: r.appPath + "\n"}
+	case "brew uninstall --cask --force foo":
+		for _, path := range r.uninstallRemovePaths {
+			_ = os.RemoveAll(path)
+		}
+		r.uninstalled = true
+		return CommandOutput{}
 	case "brew uninstall --cask --zap --force foo":
-		for _, path := range r.removePaths {
+		for _, path := range r.uninstallRemovePaths {
+			_ = os.RemoveAll(path)
+		}
+		for _, path := range r.zapRemovePaths {
 			_ = os.RemoveAll(path)
 		}
 		r.uninstalled = true

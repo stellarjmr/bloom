@@ -476,7 +476,7 @@ func FindRelatedPaths(app AppEntry) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
-		if p == "" || seen[p] {
+		if p == "" || isHomeConfigPath(p) || seen[p] {
 			continue
 		}
 		seen[p] = true
@@ -837,7 +837,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		if dryRun {
 			res.BrewRemoved = true
 		} else {
-			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--zap", "--force", cask)
+			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", cask)
 			if out.Err == nil && !brewCaskStillInstalled(ctx, runner, cask) {
 				res.BrewRemoved = true
 			}
@@ -852,7 +852,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			continue
 		}
 		if _, err := os.Lstat(p); err != nil {
-			// brew --zap may have already removed paths from the preflight plan.
+			// brew uninstall may have already removed paths from the preflight plan.
 			if res.BrewRemoved {
 				res.Files = append(res.Files, p)
 				res.RemovedKB += size
