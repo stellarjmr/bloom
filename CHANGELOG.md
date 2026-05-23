@@ -10,6 +10,12 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.17 - 2026-05-23
+
+### Added
+
+- Added `CHANGELOG.md` and `CONTRIBUTING.md` so development history, release notes, and commit discipline are traceable.
+
 ### Fixed
 
 - Avoid macOS authorization prompts from Background Task Management by removing the uninstall-time `sfltool` query (`fe73043`).
