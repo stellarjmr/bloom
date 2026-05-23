@@ -83,10 +83,10 @@ The interactive flow lives at menu item 3:
 - Each row shows the app name, on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.
 - The summary lists every removed path under each app (`✓` removed, `·` would-remove).
 
-Per-app cleanup runs in this order so brew can detect and clean its own metadata:
+Per-app cleanup runs in this order so brew can detect and clean its own metadata while Bloom preserves user configuration such as `~/.config`:
 
 1. Quit the app, unload its `LaunchAgents`.
-2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --zap --force <token>`, then verify with `brew list --cask`. Bloom then moves any remaining curated leftovers to Trash.
+2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --force <token>`, then verify with `brew list --cask`. Bloom does not use `--zap` by default because cask zap cleanup can delete protected user configuration. Bloom then moves any remaining curated leftovers to Trash.
 3. Remove the bundle and the matching `~/Library` entries.
 4. Remove the macOS Login Item, unregister the bundle from LaunchServices.
 
