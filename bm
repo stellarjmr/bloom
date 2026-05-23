@@ -4,12 +4,21 @@
 
 set -euo pipefail
 
-GREEN=$'\033[0;32m'
-CYAN=$'\033[0;36m'
-BLUE=$'\033[0;34m'
-GRAY=$'\033[0;90m'
-RED=$'\033[0;31m'
-NC=$'\033[0m'
+if [[ -n "${NO_COLOR:-}" ]]; then
+  GREEN=''
+  CYAN=''
+  BLUE=''
+  GRAY=''
+  RED=''
+  NC=''
+else
+  GREEN=$'\033[0;32m'
+  CYAN=$'\033[0;36m'
+  BLUE=$'\033[0;34m'
+  GRAY=$'\033[0;90m'
+  RED=$'\033[0;31m'
+  NC=$'\033[0m'
+fi
 CLEAR_EOL=$'\033[K'
 
 resolve_script_dir() {

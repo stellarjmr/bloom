@@ -41,20 +41,37 @@ type UninstallResult struct {
 	Failed       []string
 	Err          error
 	BrewRemoved  bool
+	AppRemoved   bool
 	StillRunning bool
 }
 
 // BatchSummary aggregates per-app results plus shared post-batch effects.
 type BatchSummary struct {
-	Results        []UninstallResult
-	TotalRemovedKB int64
-	BrewAutoremove bool
+	Results         []UninstallResult
+	TotalRemovedKB  int64
+	BrewAutoremove  bool
+	BackgroundItems []string
 }
 
 var defaultAppDirs = []string{
 	"/Applications",
 	"/Applications/Setapp",
 	"~/Applications",
+}
+
+type officialUninstallerRule struct {
+	Vendor         string
+	BundlePrefixes []string
+	NameFragments  []string
+}
+
+var officialUninstallerRules = []officialUninstallerRule{
+	{Vendor: "ESET", BundlePrefixes: []string{"com.eset."}, NameFragments: []string{"eset management agent", "eset remote administrator agent", "eset endpoint security", "eset endpoint antivirus"}},
+	{Vendor: "Jamf", BundlePrefixes: []string{"com.jamf.", "com.jamfsoftware."}, NameFragments: []string{"jamf connect", "jamf protect", "jamf self service"}},
+	{Vendor: "CrowdStrike", BundlePrefixes: []string{"com.crowdstrike."}, NameFragments: []string{"crowdstrike", "crowdstrike falcon", "falcon sensor"}},
+	{Vendor: "SentinelOne", BundlePrefixes: []string{"com.sentinelone.", "com.sentinel-labs."}, NameFragments: []string{"sentinelone", "sentinel agent"}},
+	{Vendor: "GlobalProtect", BundlePrefixes: []string{"com.paloaltonetworks."}, NameFragments: []string{"globalprotect"}},
+	{Vendor: "Cisco", BundlePrefixes: []string{"com.cisco.anyconnect", "com.cisco.secureclient"}, NameFragments: []string{"cisco secure client", "cisco anyconnect"}},
 }
 
 // ScanApplications walks the standard macOS application directories and
@@ -234,6 +251,26 @@ func appPathStringIsProtected(path string) bool {
 		return true
 	}
 	return false
+}
+
+func officialUninstallerVendor(app AppEntry) string {
+	bundleID := strings.ToLower(app.BundleID)
+	name := strings.ToLower(app.Name)
+	pathName := strings.ToLower(strings.TrimSuffix(filepath.Base(app.Path), ".app"))
+	for _, rule := range officialUninstallerRules {
+		for _, prefix := range rule.BundlePrefixes {
+			if prefix != "" && strings.HasPrefix(bundleID, strings.ToLower(prefix)) {
+				return rule.Vendor
+			}
+		}
+		for _, fragment := range rule.NameFragments {
+			fragment = strings.ToLower(fragment)
+			if fragment != "" && (strings.Contains(name, fragment) || strings.Contains(pathName, fragment)) {
+				return rule.Vendor
+			}
+		}
+	}
+	return ""
 }
 
 func symlinkTargetPath(path string) string {
@@ -428,6 +465,7 @@ func FindRelatedPaths(app AppEntry) []string {
 	if app.BundleID != "" {
 		matchInDir(launchUser, app.BundleID, &paths)
 	}
+	matchLaunchAgentsReferencingApp(app, &paths)
 
 	// Cookies + HTTPStorages binarycookies
 	cookies := filepath.Join(home, "Library", "Cookies")
@@ -450,6 +488,73 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 
 	return out
+}
+
+func matchLaunchAgentsReferencingApp(app AppEntry, out *[]string) {
+	if app.Path == "" {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+	dir := filepath.Join(home, "Library", "LaunchAgents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".plist") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if containsAppPathReference(string(data), app.Path) {
+			*out = append(*out, path)
+		}
+	}
+}
+
+func containsAppPathReference(text, appPath string) bool {
+	if appPath == "" {
+		return false
+	}
+	for start := 0; start < len(text); {
+		idx := strings.Index(text[start:], appPath)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(appPath)
+		if pathReferenceBoundaryBefore(text, idx) && pathReferenceBoundaryAfter(text, end) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(text[idx:])
+		if size <= 0 {
+			return false
+		}
+		start = idx + size
+	}
+	return false
+}
+
+func pathReferenceBoundaryBefore(s string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:idx])
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'>=(:", r)
+}
+
+func pathReferenceBoundaryAfter(s string, idx int) bool {
+	if idx >= len(s) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s[idx:])
+	return r == '/' || unicode.IsSpace(r) || strings.ContainsRune("\"'<):;", r)
 }
 
 func matchVSCodePaths(app AppEntry, out *[]string) {
@@ -712,8 +817,13 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		res.Err = errors.New("missing app path")
 		return res
 	}
+	if vendor := officialUninstallerVendor(app); vendor != "" {
+		res.Err = fmt.Errorf("requires the official %s uninstaller", vendor)
+		return res
+	}
 
 	paths := FindRelatedPaths(app)
+	loginItemHelpers := discoverLoginItemHelperBundleIDs(app.Path)
 	pathSizes := make(map[string]int64, len(paths))
 	for _, p := range paths {
 		pathSizes[p] = pathSizeKB(p)
@@ -747,6 +857,9 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			if res.BrewRemoved {
 				res.Files = append(res.Files, p)
 				res.RemovedKB += size
+				if p == app.Path {
+					res.AppRemoved = true
+				}
 			}
 			continue
 		}
@@ -756,14 +869,20 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		}
 		res.Files = append(res.Files, p)
 		res.RemovedKB += size
+		if p == app.Path {
+			res.AppRemoved = true
+		}
 	}
 
-	if !dryRun {
+	if !dryRun && res.AppRemoved {
 		removeLoginItem(ctx, runner, app)
+		bootoutLoginItemHelpers(ctx, runner, loginItemHelpers)
 		unregisterLaunchServices(ctx, runner, app.Path)
 	}
 
-	if len(res.Failed) > 0 && len(res.Files) == 0 && !res.BrewRemoved {
+	if !dryRun && !res.AppRemoved {
+		res.Err = errors.New("app bundle was not removed")
+	} else if len(res.Failed) > 0 && len(res.Files) == 0 && !res.BrewRemoved {
 		res.Err = fmt.Errorf("nothing removed (%d failures)", len(res.Failed))
 	}
 	return res
@@ -777,11 +896,15 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun bool) BatchSummary {
 	var sum BatchSummary
 	anyBrew := false
+	successfulApps := []AppEntry{}
 
 	for _, app := range apps {
 		res := UninstallApp(ctx, runner, app, dryRun)
 		sum.Results = append(sum.Results, res)
 		sum.TotalRemovedKB += res.RemovedKB
+		if res.Err == nil && (dryRun || res.AppRemoved) {
+			successfulApps = append(successfulApps, app)
+		}
 		if res.BrewRemoved {
 			anyBrew = true
 		}
@@ -790,13 +913,85 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		sum.BrewAutoremove = anyBrew
 		return sum
 	}
-	removeAppsFromDock(ctx, runner, apps)
-	refreshLaunchServices(ctx, runner)
+	if len(successfulApps) > 0 {
+		removeAppsFromDock(ctx, runner, successfulApps)
+		refreshLaunchServices(ctx, runner)
+	}
 	if anyBrew {
 		out := runner.Run(ctx, "brew", "autoremove")
 		sum.BrewAutoremove = out.Err == nil
 	}
+	sum.BackgroundItems = detectBackgroundItemLeftovers(ctx, runner, successfulApps)
 	return sum
+}
+
+func detectBackgroundItemLeftovers(ctx context.Context, runner Runner, apps []AppEntry) []string {
+	if len(apps) == 0 {
+		return nil
+	}
+	sfltool, err := runner.LookPath("sfltool")
+	if err != nil || sfltool == "" {
+		return nil
+	}
+	out := runner.Run(ctx, sfltool, "dumpbtm")
+	if out.Err != nil || out.Stdout == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	warnings := []string{}
+	for _, app := range apps {
+		if app.BundleID == "" || seen[app.Name] {
+			continue
+		}
+		if containsBundleIDToken(out.Stdout, app.BundleID) {
+			seen[app.Name] = true
+			warnings = append(warnings, app.Name)
+		}
+	}
+	return warnings
+}
+
+func containsBundleIDToken(text, bundleID string) bool {
+	if bundleID == "" {
+		return false
+	}
+	for start := 0; start < len(text); {
+		idx := strings.Index(text[start:], bundleID)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(bundleID)
+		if bundleIDBoundaryBefore(text, idx) && bundleIDBoundaryAfter(text, end) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(text[idx:])
+		if size <= 0 {
+			return false
+		}
+		start = idx + size
+	}
+	return false
+}
+
+func bundleIDBoundaryBefore(s string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:idx])
+	return isBundleIDBoundary(r)
+}
+
+func bundleIDBoundaryAfter(s string, idx int) bool {
+	if idx >= len(s) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s[idx:])
+	return isBundleIDBoundary(r)
+}
+
+func isBundleIDBoundary(r rune) bool {
+	return !isBundleIDAlphaNum(r) && r != '.' && r != '-'
 }
 
 // removeLoginItem deletes a macOS Login Item entry whose name matches the app.
@@ -819,6 +1014,38 @@ func removeLoginItem(ctx context.Context, runner Runner, app AppEntry) {
 	_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
 }
 
+func discoverLoginItemHelperBundleIDs(appPath string) []string {
+	root := filepath.Join(appPath, "Contents", "Library", "LoginItems")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	ids := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".app") {
+			continue
+		}
+		id := readBundleID(filepath.Join(root, entry.Name()))
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return uniqueStrings(ids)
+}
+
+func bootoutLoginItemHelpers(ctx context.Context, runner Runner, helperIDs []string) {
+	if len(helperIDs) == 0 {
+		return
+	}
+	uid := os.Getuid()
+	for _, id := range helperIDs {
+		if !looksLikeBundleID(id) {
+			continue
+		}
+		_ = runner.Run(ctx, "/bin/launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, id))
+	}
+}
+
 // lsregisterPath returns the canonical path for the Launch Services helper
 // shipped with macOS.
 const lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
@@ -839,48 +1066,32 @@ func refreshLaunchServices(ctx context.Context, runner Runner) {
 	_ = runner.Run(ctx, lsregisterPath, "-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system")
 }
 
-// removeAppsFromDock rewrites com.apple.dock to drop persistent-apps tiles
-// whose file-data path matches one of the removed bundles, then restarts Dock.
+// removeAppsFromDock rewrites com.apple.dock to drop app tiles whose bundle id
+// or file-data path matches one of the removed bundles, then restarts Dock.
 func removeAppsFromDock(ctx context.Context, runner Runner, apps []AppEntry) {
 	if len(apps) == 0 {
 		return
 	}
-	out := runner.Run(ctx, "defaults", "read", "com.apple.dock", "persistent-apps")
-	if out.Err != nil {
-		return
-	}
 	changed := false
-	body := out.Stdout
 	for _, app := range apps {
-		// "_CFURLString" = "file:///Applications/Foo.app/"
-		needle := "file://" + urlPathEscape(app.Path)
-		if strings.Contains(body, needle) || strings.Contains(body, app.Path) {
-			changed = true
-		}
-	}
-	if !changed {
-		return
-	}
-	// Rebuild the array by filtering out matching entries via PlistBuddy.
-	for _, app := range apps {
-		// Iterate from high to low to keep indices stable as we delete.
-		count := dockTileCount(ctx, runner)
-		for i := count - 1; i >= 0; i-- {
-			val := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
-				fmt.Sprintf("Print :persistent-apps:%d:tile-data:file-data:_CFURLString", i),
-				dockPlistPath())
-			if val.Err != nil {
-				continue
-			}
-			s := strings.TrimSpace(val.Stdout)
-			if strings.Contains(s, app.Path) || strings.Contains(s, urlPathEscape(app.Path)) {
-				_ = runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
-					fmt.Sprintf("Delete :persistent-apps:%d", i),
+		for _, array := range []string{"persistent-apps", "persistent-others", "recent-apps"} {
+			count := dockTileCount(ctx, runner, array)
+			for i := count - 1; i >= 0; i-- {
+				if !dockTileMatchesApp(ctx, runner, array, i, app) {
+					continue
+				}
+				out := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+					fmt.Sprintf("Delete :%s:%d", array, i),
 					dockPlistPath())
+				if out.Err == nil {
+					changed = true
+				}
 			}
 		}
 	}
-	_ = runner.Run(ctx, "/usr/bin/killall", "Dock")
+	if changed {
+		_ = runner.Run(ctx, "/usr/bin/killall", "Dock")
+	}
 }
 
 func dockPlistPath() string {
@@ -888,9 +1099,9 @@ func dockPlistPath() string {
 	return filepath.Join(home, "Library", "Preferences", "com.apple.dock.plist")
 }
 
-func dockTileCount(ctx context.Context, runner Runner) int {
+func dockTileCount(ctx context.Context, runner Runner, array string) int {
 	out := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
-		"Print :persistent-apps", dockPlistPath())
+		fmt.Sprintf("Print :%s", array), dockPlistPath())
 	if out.Err != nil {
 		return 0
 	}
@@ -901,6 +1112,26 @@ func dockTileCount(ctx context.Context, runner Runner) int {
 		}
 	}
 	return count
+}
+
+func dockTileMatchesApp(ctx context.Context, runner Runner, array string, index int, app AppEntry) bool {
+	url := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+		fmt.Sprintf("Print :%s:%d:tile-data:file-data:_CFURLString", array, index),
+		dockPlistPath())
+	bundleID := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+		fmt.Sprintf("Print :%s:%d:tile-data:bundle-identifier", array, index),
+		dockPlistPath())
+	if app.BundleID != "" && bundleID.Err == nil && strings.TrimSpace(bundleID.Stdout) == app.BundleID {
+		return true
+	}
+	if url.Err != nil {
+		return false
+	}
+	if app.Path == "" {
+		return false
+	}
+	s := strings.TrimSpace(url.Stdout)
+	return strings.Contains(s, app.Path) || strings.Contains(s, urlPathEscape(app.Path))
 }
 
 func urlPathEscape(p string) string {

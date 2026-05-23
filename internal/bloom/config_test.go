@@ -51,6 +51,33 @@ exclude = ["legacy"]
 	}
 }
 
+func TestLoadConfigHonorsNoColorEnvironment(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Color {
+		t.Fatal("NO_COLOR did not disable default color output")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[settings]
+color = true
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Color {
+		t.Fatal("NO_COLOR did not override config color=true")
+	}
+}
+
 func TestBuildTasksUsesConfiguredOrderOnly(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TaskOrder = []string{"npm", "nvim"}

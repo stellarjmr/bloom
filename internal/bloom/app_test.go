@@ -198,6 +198,50 @@ func TestProtectedAppPathAllowsUserInstalledAppleApps(t *testing.T) {
 	}
 }
 
+func TestUninstallAppBlocksOfficialUninstallerApps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	appPath := filepath.Join(home, "Applications", "Falcon.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res := UninstallApp(context.Background(), pathRunner{}, AppEntry{
+		Path:     appPath,
+		Name:     "Falcon",
+		BundleID: "com.crowdstrike.falcon.UserAgent",
+	}, false)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "official CrowdStrike uninstaller") {
+		t.Fatalf("error = %v, want official uninstaller block", res.Err)
+	}
+	if _, err := os.Stat(appPath); err != nil {
+		t.Fatalf("blocked app should not be touched: %v", err)
+	}
+}
+
+func TestOfficialUninstallerVendorDoesNotBlockGenericFalconNames(t *testing.T) {
+	if vendor := officialUninstallerVendor(AppEntry{Name: "Falcon", BundleID: "com.example.falcon", Path: "/Applications/Falcon.app"}); vendor != "" {
+		t.Fatalf("generic Falcon app was blocked as %q", vendor)
+	}
+}
+
+func TestReferenceTokenMatchingAvoidsSubstringFalsePositives(t *testing.T) {
+	appPath := "/Applications/Foo.app"
+	if !containsAppPathReference(`<string>/Applications/Foo.app/Contents/MacOS/foo</string>`, appPath) {
+		t.Fatal("app path reference with child path was not matched")
+	}
+	if containsAppPathReference(`<string>/Applications/Foo.app.backup</string>`, appPath) {
+		t.Fatal("app path substring was treated as a reference")
+	}
+	if !containsBundleIDToken("Bundle Identifier = com.example.foo\n", "com.example.foo") {
+		t.Fatal("exact bundle id token was not matched")
+	}
+	if containsBundleIDToken("Bundle Identifier = com.example.foo.helper\n", "com.example.foo") {
+		t.Fatal("bundle id prefix was treated as exact token")
+	}
+}
+
 func TestRunUpdatePackageFilterRunsSelectedTaskPackage(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TaskOrder = []string{"brew", "npm"}
@@ -799,11 +843,16 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	appFile := filepath.Join(appPath, "Contents", "MacOS", "foo")
 	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
 	cacheFile := filepath.Join(cachePath, "cache.db")
-	for _, path := range []string{appFile, cacheFile} {
+	launchAgentPath := filepath.Join(home, "Library", "LaunchAgents", "com.other.foo-helper.plist")
+	for _, path := range []string{appFile, cacheFile, launchAgentPath} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		contents := []byte("data")
+		if path == launchAgentPath {
+			contents = []byte(appPath)
+		}
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -823,7 +872,7 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	if len(res.Failed) > 0 {
 		t.Fatalf("failed paths = %#v", res.Failed)
 	}
-	for _, path := range []string{appPath, cachePath} {
+	for _, path := range []string{appPath, cachePath, launchAgentPath} {
 		if !containsString(res.Files, path) {
 			t.Fatalf("result files missing %q: %#v", path, res.Files)
 		}
@@ -834,6 +883,7 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(testTrash, "Foo.app", "Contents", "MacOS", "foo"),
 		filepath.Join(testTrash, "com.example.foo", "cache.db"),
+		filepath.Join(testTrash, "com.other.foo-helper.plist"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("trashed path %q missing: %v", path, err)
@@ -912,6 +962,90 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewZapRemovesPaths(t *testing.T) {
 	}
 	if !runnerCallContains(r.calls, "brew uninstall --cask --zap --force foo") {
 		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	}
+}
+
+func TestUninstallAppBootsOutLoginItemHelpers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	helperPath := filepath.Join(appPath, "Contents", "Library", "LoginItems", "Foo Helper.app")
+	writeTestInfoPlist(t, helperPath, "com.example.foo.helper", "foo-helper")
+
+	r := &recordingRunner{outputs: map[string]CommandOutput{}}
+	res := UninstallApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, false)
+	if res.Err != nil {
+		t.Fatalf("uninstall error = %v", res.Err)
+	}
+	want := fmt.Sprintf("/bin/launchctl bootout gui/%d/com.example.foo.helper", os.Getuid())
+	if !runnerCallContains(r.calls, want) {
+		t.Fatalf("login item helper was not booted out; calls = %#v", r.calls)
+	}
+}
+
+func TestUninstallAppSkipsPostRemovalSideEffectsWhenBundleRemains(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	trashFile := filepath.Join(home, "not-a-trash-dir")
+	if err := os.WriteFile(trashFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BLOOM_TEST_TRASH_DIR", trashFile)
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	r := &recordingRunner{outputs: map[string]CommandOutput{}}
+	res := UninstallApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, false)
+	if res.Err == nil {
+		t.Fatal("uninstall unexpectedly succeeded with invalid Trash directory")
+	}
+	if res.AppRemoved {
+		t.Fatal("AppRemoved = true even though bundle stayed on disk")
+	}
+	for _, forbidden := range []string{"/usr/bin/osascript", "/bin/launchctl bootout", lsregisterPath + " -u"} {
+		if runnerCallContains(r.calls, forbidden) {
+			t.Fatalf("post-removal side effect %q ran before bundle removal: %#v", forbidden, r.calls)
+		}
+	}
+}
+
+func TestDetectBackgroundItemLeftoversMatchesBundleID(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"sfltool": true},
+		outputs: map[string]CommandOutput{
+			"/bin/sfltool dumpbtm": {Stdout: "Bundle Identifier = com.example.foo\n"},
+		},
+	}
+	got := detectBackgroundItemLeftovers(context.Background(), r, []AppEntry{
+		{Name: "Foo", BundleID: "com.example.foo"},
+		{Name: "Bar", BundleID: "com.example.bar"},
+	})
+	want := []string{"Foo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("background leftovers = %#v, want %#v", got, want)
+	}
+}
+
+func TestRemoveAppsFromDockMatchesBundleIDAcrossDockArrays(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dockPath := dockPlistPath()
+	r := &recordingRunner{outputs: map[string]CommandOutput{
+		"/usr/libexec/PlistBuddy -c Print :persistent-others " + dockPath:                                    {Stdout: "Dict {\n}\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-others:0:tile-data:file-data:_CFURLString " + dockPath: {Stdout: "file:///Applications/Other.app/\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-others:0:tile-data:bundle-identifier " + dockPath:      {Stdout: "com.example.foo\n"},
+		"/usr/libexec/PlistBuddy -c Delete :persistent-others:0 " + dockPath:                                 {},
+	}}
+
+	removeAppsFromDock(context.Background(), r, []AppEntry{{Path: "/Applications/Foo.app", BundleID: "com.example.foo"}})
+	if !runnerCallContains(r.calls, "Delete :persistent-others:0") {
+		t.Fatalf("dock tile was not deleted by bundle id; calls = %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/usr/bin/killall Dock") {
+		t.Fatalf("Dock was not restarted after deletion; calls = %#v", r.calls)
 	}
 }
 
@@ -1021,6 +1155,30 @@ func TestPrintUninstallSummaryWarnsWhenAppStillRunning(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Foo may still be running") {
 		t.Fatalf("stderr missing still-running warning: %q", stderr.String())
+	}
+}
+
+func TestPrintUninstallSummaryWarnsWhenBackgroundItemsRemain(t *testing.T) {
+	summary := BatchSummary{
+		Results: []UninstallResult{{
+			App:   AppEntry{Name: "Foo"},
+			Files: []string{"/Applications/Foo.app"},
+		}},
+		BackgroundItems: []string{"Foo"},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := App{Out: &stdout, Err: &stderr}
+	processed, failures := app.printUninstallSummary(summary, false, false)
+	if processed != 1 || failures != 0 {
+		t.Fatalf("processed, failures = %d, %d; want 1, 0", processed, failures)
+	}
+	if !strings.Contains(stderr.String(), "background items still registered: Foo") {
+		t.Fatalf("stderr missing background item warning: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "System Settings > General > Login Items & Extensions") {
+		t.Fatalf("stderr missing manual clear guidance: %q", stderr.String())
 	}
 }
 

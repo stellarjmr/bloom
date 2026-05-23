@@ -926,6 +926,10 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 				fmt.Fprintln(a.Out, "ran brew autoremove")
 			}
 		}
+		if !dryRun && len(summary.BackgroundItems) > 0 {
+			fmt.Fprintf(a.Err, "   ! background items still registered: %s\n", strings.Join(summary.BackgroundItems, ", "))
+			fmt.Fprintln(a.Err, "   ! clear them in System Settings > General > Login Items & Extensions")
+		}
 	}
 	return processed, failures
 }
