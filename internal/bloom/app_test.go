@@ -866,6 +866,91 @@ func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
 	}
 }
 
+func TestUninstallAppKeepsPlannedStatsWhenBrewZapRemovesPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appPath := filepath.Join(home, "Applications", "foo.app")
+	appFile := filepath.Join(appPath, "Contents", "MacOS", "foo")
+	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	cacheFile := filepath.Join(cachePath, "cache.db")
+	for _, path := range []string{appFile, cacheFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := &brewZapRemovesPathsRunner{
+		appPath:     appPath,
+		removePaths: []string{appPath, cachePath},
+	}
+	res := UninstallApp(context.Background(), r, AppEntry{
+		Path:     appPath,
+		Name:     "foo",
+		BundleID: "com.example.foo",
+	}, false)
+	if res.Err != nil {
+		t.Fatalf("uninstall error = %v", res.Err)
+	}
+	if !res.BrewRemoved {
+		t.Fatal("brew removal was not recorded")
+	}
+	for _, path := range []string{appPath, cachePath} {
+		if !containsString(res.Files, path) {
+			t.Fatalf("result files missing %q after brew zap removed it: %#v", path, res.Files)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("original path %q still exists or stat failed unexpectedly: %v", path, err)
+		}
+	}
+	if res.RemovedKB == 0 {
+		t.Fatalf("removed size = 0, want planned size from paths removed by brew zap")
+	}
+	if !runnerCallContains(r.calls, "brew uninstall --cask --zap --force foo") {
+		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	}
+}
+
+type brewZapRemovesPathsRunner struct {
+	appPath     string
+	removePaths []string
+	uninstalled bool
+	calls       []string
+}
+
+func (r *brewZapRemovesPathsRunner) LookPath(file string) (string, error) {
+	if file == "brew" {
+		return "/bin/brew", nil
+	}
+	return "", errNotFound
+}
+
+func (r *brewZapRemovesPathsRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	switch call {
+	case "brew list --cask":
+		if r.uninstalled {
+			return CommandOutput{}
+		}
+		return CommandOutput{Stdout: "foo\n"}
+	case "brew info --cask foo":
+		return CommandOutput{Stdout: r.appPath + "\n"}
+	case "brew uninstall --cask --zap --force foo":
+		for _, path := range r.removePaths {
+			_ = os.RemoveAll(path)
+		}
+		r.uninstalled = true
+		return CommandOutput{}
+	default:
+		return CommandOutput{Err: errNotFound}
+	}
+}
+
 func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	summary := BatchSummary{
 		Results: []UninstallResult{{
@@ -878,6 +963,7 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 			Failed: []string{"/Users/test/Library/Application Scripts/com.example.foo"},
 		}},
 		TotalRemovedKB: 2048,
+		BrewAutoremove: true,
 	}
 
 	var previewOut, previewErr bytes.Buffer
@@ -888,6 +974,9 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(previewOut.String(), "   · /Applications/Foo.app") {
 		t.Fatalf("preview output did not include file list: %q", previewOut.String())
+	}
+	if !strings.Contains(previewOut.String(), "would run brew autoremove") {
+		t.Fatalf("preview output did not describe pending brew autoremove: %q", previewOut.String())
 	}
 	if !strings.Contains(previewErr.String(), "could not move to Trash") {
 		t.Fatalf("preview stderr did not include failures: %q", previewErr.String())
@@ -905,6 +994,9 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(out, "✓ Foo") || !strings.Contains(out, "Uninstalled 1 apps, moved 2.0M to Trash") {
 		t.Fatalf("result output missing app line or summary: %q", out)
+	}
+	if !strings.Contains(out, "ran brew autoremove") {
+		t.Fatalf("result output did not report completed brew autoremove: %q", out)
 	}
 	if !strings.Contains(resultErr.String(), "could not move to Trash") {
 		t.Fatalf("result stderr did not include failures: %q", resultErr.String())

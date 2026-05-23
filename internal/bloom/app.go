@@ -920,7 +920,11 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 			fmt.Fprintf(a.Out, "\nUninstalled %d apps, moved %s to Trash\n", processed, FormatBytes(summary.TotalRemovedKB))
 		}
 		if summary.BrewAutoremove {
-			fmt.Fprintln(a.Out, "ran brew autoremove")
+			if dryRun {
+				fmt.Fprintln(a.Out, "would run brew autoremove")
+			} else {
+				fmt.Fprintln(a.Out, "ran brew autoremove")
+			}
 		}
 	}
 	return processed, failures

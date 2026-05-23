@@ -698,7 +698,9 @@ func diagnosticReportNameMatches(name string, prefixes []string) bool {
 
 // UninstallApp moves the bundle and all related files for one app to Trash.
 // If dryRun is true, no files are touched and Files lists what would be
-// moved.
+// moved. For Homebrew casks, the real run records the same preflight cleanup
+// plan for paths that Homebrew removes before Bloom can move remaining
+// leftovers itself.
 //
 // Order matters for Homebrew casks: brew must be invoked BEFORE the .app
 // bundle is deleted so it can detect its own artifact and clean its
@@ -709,6 +711,12 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	if app.Path == "" {
 		res.Err = errors.New("missing app path")
 		return res
+	}
+
+	paths := FindRelatedPaths(app)
+	pathSizes := make(map[string]int64, len(paths))
+	for _, p := range paths {
+		pathSizes[p] = pathSizeKB(p)
 	}
 
 	if !dryRun {
@@ -727,16 +735,19 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		}
 	}
 
-	paths := FindRelatedPaths(app)
 	for _, p := range paths {
-		size := pathSizeKB(p)
+		size := pathSizes[p]
 		if dryRun {
 			res.Files = append(res.Files, p)
 			res.RemovedKB += size
 			continue
 		}
-		// brew --zap may have already removed it.
 		if _, err := os.Lstat(p); err != nil {
+			// brew --zap may have already removed paths from the preflight plan.
+			if res.BrewRemoved {
+				res.Files = append(res.Files, p)
+				res.RemovedKB += size
+			}
 			continue
 		}
 		if err := movePathToTrashStubborn(ctx, runner, p); err != nil {
