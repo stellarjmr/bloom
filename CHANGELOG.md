@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.18 - 2026-05-25
+
 ### Added
 
 - Added `bm history` to review recent clean and uninstall activity from Bloom's local operation logs.
@@ -20,6 +22,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Deduplicate uninstall scan results by bundle ID so backup or mirrored app clones do not appear alongside the live app.
 - Show the exact Homebrew cask `--zap` command in uninstall dry-runs and summaries when a cask is detected.
 - Group `bm history` uninstall output by operation for easier review.
+
+### Fixed
+
+- Corrected `bm uninstall --list` help text to say it lists installed apps.
 
 ## v0.6.17 - 2026-05-23
 
