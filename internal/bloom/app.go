@@ -891,10 +891,17 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 			marker = "·"
 		}
 		brewNote := ""
-		if res.BrewRemoved {
+		if res.BrewRemoved || res.BrewCask != "" {
 			brewNote = "  [brew cask]"
 		}
 		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
+		if command := brewCaskZapCommand(res.BrewCask); command != "" {
+			verb := "ran"
+			if dryRun {
+				verb = "would run"
+			}
+			fmt.Fprintf(a.Out, "   %s: %s\n", verb, command)
+		}
 		if showFiles {
 			fileMark := "✓"
 			if dryRun {

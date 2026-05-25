@@ -40,6 +40,7 @@ type UninstallResult struct {
 	Files        []string
 	Failed       []string
 	Err          error
+	BrewCask     string
 	BrewRemoved  bool
 	AppRemoved   bool
 	StillRunning bool
@@ -912,6 +913,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 
 	cask := detectHomebrewCask(ctx, runner, app)
 	if cask != "" {
+		res.BrewCask = cask
 		if dryRun {
 			res.BrewRemoved = true
 		} else {
@@ -963,6 +965,13 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		res.Err = fmt.Errorf("nothing removed (%d failures)", len(res.Failed))
 	}
 	return res
+}
+
+func brewCaskZapCommand(cask string) string {
+	if cask == "" {
+		return ""
+	}
+	return fmt.Sprintf("brew uninstall --cask --force --zap %s", cask)
 }
 
 // BatchUninstall uninstalls a list of apps and then runs shared post-batch

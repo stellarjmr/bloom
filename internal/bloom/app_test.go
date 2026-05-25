@@ -958,6 +958,9 @@ func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("uninstall error = %v", res.Err)
 	}
+	if res.BrewCask != "foo" {
+		t.Fatalf("brew cask = %q, want foo", res.BrewCask)
+	}
 	if !runnerCallContains(r.calls, "brew uninstall --cask --force --zap foo") {
 		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
 	}
@@ -1012,6 +1015,26 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewUninstallRemovesPaths(t *testing.T
 	}
 	if !runnerCallContains(r.calls, "brew uninstall --cask --force --zap foo") {
 		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	}
+}
+
+func TestUninstallAppDryRunRecordsBrewCaskWithoutRunningZap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	appPath := filepath.Join(home, "Applications", "foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	r := &brewCaskUninstallRunner{appPath: appPath}
+
+	res := UninstallApp(context.Background(), r, AppEntry{Path: appPath, Name: "foo", BundleID: "com.example.foo"}, true)
+	if res.Err != nil {
+		t.Fatalf("dry-run uninstall error = %v", res.Err)
+	}
+	if res.BrewCask != "foo" || !res.BrewRemoved {
+		t.Fatalf("brew metadata = %q, %v; want foo, true", res.BrewCask, res.BrewRemoved)
+	}
+	if runnerCallContains(r.calls, "brew uninstall") {
+		t.Fatalf("dry-run should not run brew uninstall: %#v", r.calls)
 	}
 }
 
@@ -1149,6 +1172,7 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 		Results: []UninstallResult{{
 			App:       AppEntry{Name: "Foo"},
 			RemovedKB: 2048,
+			BrewCask:  "foo",
 			Files: []string{
 				"/Applications/Foo.app",
 				"/Users/test/Library/Containers/com.example.foo",
@@ -1168,6 +1192,9 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	if !strings.Contains(previewOut.String(), "   · /Applications/Foo.app") {
 		t.Fatalf("preview output did not include file list: %q", previewOut.String())
 	}
+	if !strings.Contains(previewOut.String(), "would run: brew uninstall --cask --force --zap foo") {
+		t.Fatalf("preview output did not describe pending brew zap command: %q", previewOut.String())
+	}
 	if !strings.Contains(previewOut.String(), "would run brew autoremove") {
 		t.Fatalf("preview output did not describe pending brew autoremove: %q", previewOut.String())
 	}
@@ -1184,6 +1211,9 @@ func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	out := resultOut.String()
 	if strings.Contains(out, "/Applications/Foo.app") || strings.Contains(out, "/Users/test/Library/Containers/com.example.foo") {
 		t.Fatalf("result output repeated file list: %q", out)
+	}
+	if !strings.Contains(out, "ran: brew uninstall --cask --force --zap foo") {
+		t.Fatalf("result output did not report completed brew zap command: %q", out)
 	}
 	if !strings.Contains(out, "✓ Foo") || !strings.Contains(out, "Uninstalled 1 apps, moved 2.0M to Trash") {
 		t.Fatalf("result output missing app line or summary: %q", out)

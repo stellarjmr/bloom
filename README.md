@@ -90,6 +90,8 @@ Per-app cleanup runs in this order so brew can detect and clean its own metadata
 3. Remove the bundle and the matching `~/Library` entries.
 4. Remove the macOS Login Item, unregister the bundle from LaunchServices.
 
+Dry runs and uninstall summaries print the exact Homebrew zap command when a cask is detected.
+
 After the batch completes Bloom rewrites the Dock plist, restarts Dock, rebuilds the LaunchServices database, and runs `brew autoremove` if any cask was removed.
 
 Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear in the menu.
