@@ -909,8 +909,12 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	paths := FindRelatedPaths(app)
 	loginItemHelpers := discoverLoginItemHelperBundleIDs(app.Path)
 	pathSizes := make(map[string]int64, len(paths))
+	appBundlePlanned := false
 	for _, p := range paths {
 		pathSizes[p] = pathSizeKB(p)
+		if p == app.Path {
+			appBundlePlanned = true
+		}
 	}
 
 	if !dryRun {
@@ -930,33 +934,69 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		}
 	}
 
-	for _, p := range paths {
-		size := pathSizes[p]
-		if dryRun {
-			res.Files = append(res.Files, p)
-			res.RemovedKB += size
-			continue
+	recordRemovedPath := func(p string, size int64) {
+		res.Files = append(res.Files, p)
+		res.RemovedKB += size
+		if !dryRun && p == app.Path {
+			res.AppRemoved = true
 		}
+	}
+	recordBloomMovedPath := func(p string, size int64) {
+		recordRemovedPath(p, size)
+		res.Moved = append(res.Moved, UninstallMovedPath{Path: p, SizeKB: size})
+	}
+	moveAppBundle := func() bool {
+		if !appBundlePlanned {
+			return false
+		}
+		size := pathSizes[app.Path]
+		if _, err := os.Lstat(app.Path); err != nil {
+			// brew uninstall may have already removed paths from the preflight plan.
+			if res.BrewRemoved {
+				recordRemovedPath(app.Path, size)
+			}
+			return res.AppRemoved
+		}
+		if err := movePathToTrashStubborn(ctx, runner, app.Path); err != nil {
+			res.Failed = append(res.Failed, app.Path)
+			return false
+		}
+		recordBloomMovedPath(app.Path, size)
+		return true
+	}
+	moveLeftoverPath := func(p string) {
+		size := pathSizes[p]
 		if _, err := os.Lstat(p); err != nil {
 			// brew uninstall may have already removed paths from the preflight plan.
 			if res.BrewRemoved {
-				res.Files = append(res.Files, p)
-				res.RemovedKB += size
-				if p == app.Path {
-					res.AppRemoved = true
-				}
+				recordRemovedPath(p, size)
 			}
-			continue
+			return
 		}
 		if err := movePathToTrashStubborn(ctx, runner, p); err != nil {
 			res.Failed = append(res.Failed, p)
-			continue
+			return
 		}
-		res.Files = append(res.Files, p)
-		res.Moved = append(res.Moved, UninstallMovedPath{Path: p, SizeKB: size})
-		res.RemovedKB += size
-		if p == app.Path {
-			res.AppRemoved = true
+		recordBloomMovedPath(p, size)
+	}
+
+	if dryRun {
+		for _, p := range paths {
+			recordRemovedPath(p, pathSizes[p])
+		}
+	} else {
+		// The app bundle is the gate for Bloom-managed cleanup: if it cannot
+		// be moved, leave related sandbox/support files in place so the app is
+		// not left half-uninstalled.
+		if !moveAppBundle() {
+			res.Err = errors.New("app bundle was not removed; skipped related files to avoid partial uninstall")
+			return res
+		}
+		for _, p := range paths {
+			if p == app.Path {
+				continue
+			}
+			moveLeftoverPath(p)
 		}
 	}
 
@@ -967,7 +1007,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	}
 
 	if !dryRun && !res.AppRemoved {
-		res.Err = errors.New("app bundle was not removed")
+		res.Err = errors.New("app bundle was not removed; skipped related files to avoid partial uninstall")
 	} else if len(res.Failed) > 0 && len(res.Files) == 0 && !res.BrewRemoved {
 		res.Err = fmt.Errorf("nothing removed (%d failures)", len(res.Failed))
 	}

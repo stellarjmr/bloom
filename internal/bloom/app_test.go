@@ -1005,6 +1005,54 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	}
 }
 
+func TestUninstallAppSkipsRelatedFilesWhenBundleMoveFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appDir := filepath.Join(home, "Applications")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appPath := filepath.Join(appDir, "Foo.app")
+	if err := os.Symlink("/usr", appPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	containerFile := filepath.Join(home, "Library", "Containers", "com.example.foo", "data.db")
+	scriptFile := filepath.Join(home, "Library", "Application Scripts", "com.example.foo", "script.sh")
+	for _, path := range []string{containerFile, scriptFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res := UninstallApp(context.Background(), pathRunner{}, AppEntry{
+		Path:     appPath,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	}, false)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "skipped related files") {
+		t.Fatalf("uninstall error = %v, want skipped-related-files failure", res.Err)
+	}
+	if res.AppRemoved {
+		t.Fatal("AppRemoved = true even though bundle stayed on disk")
+	}
+	if !containsString(res.Failed, appPath) {
+		t.Fatalf("failed paths missing app bundle %q: %#v", appPath, res.Failed)
+	}
+	if len(res.Files) != 0 || len(res.Moved) != 0 {
+		t.Fatalf("related files were removed after app bundle failure: files=%#v moved=%#v", res.Files, res.Moved)
+	}
+	for _, path := range []string{appPath, filepath.Dir(containerFile), filepath.Dir(scriptFile)} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("path %q should remain after failed app removal: %v", path, err)
+		}
+	}
+}
+
 func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

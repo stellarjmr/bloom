@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Fixed
+
+- Prevent `bm uninstall` from partially moving sandbox leftovers when the app bundle itself cannot be moved to Trash.
+
 ## v0.6.18 - 2026-05-25
 
 ### Added
