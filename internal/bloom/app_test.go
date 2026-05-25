@@ -199,7 +199,11 @@ func TestRunHistoryShowsRecentCleanAndUninstallLogs(t *testing.T) {
 		"2026-05-25T10:01:00+0800\ttrash\t2048\tok\t/Users/test/Library/Caches/Old",
 		"2026-05-25T10:03:00+0800\ttrash\t16\terror\t/Users/test/Library/Caches/New",
 	}, "\n") + "\n"
-	uninstallLog := "2026-05-25T10:02:00+0800\tuninstall\tFoo\tcommand\tok\t0\tbrew uninstall --cask --force --zap foo\n"
+	uninstallLog := strings.Join([]string{
+		"2026-05-25T10:02:00+0800\tuninstall\tFoo\tcommand\tok\t0\tbrew uninstall --cask --force --zap foo",
+		"2026-05-25T10:02:00+0800\tuninstall\tFoo\tmoved\tok\t4\t/Applications/Foo.app",
+		"2026-05-25T10:02:00+0800\tuninstall\tFoo\tfailed\terror\tunknown\t/Users/test/Library/Application Scripts/com.example.foo",
+	}, "\n") + "\n"
 	if err := os.WriteFile(bloomLogFile(home, "clean.log"), []byte(cleanLog), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -210,19 +214,28 @@ func TestRunHistoryShowsRecentCleanAndUninstallLogs(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	app := App{Out: &stdout, Err: &stderr}
-	code := app.Run([]string{"history", "--limit", "2"})
+	code := app.Run([]string{"history", "--limit", "4"})
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("history lines = %#v, want 2", lines)
+	if len(lines) != 5 {
+		t.Fatalf("history lines = %#v, want 5", lines)
 	}
 	if !strings.Contains(lines[0], "2026-05-25 10:03  clean  failed  16.0K") {
 		t.Fatalf("newest line = %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "2026-05-25 10:02  uninstall  Foo  ran: brew uninstall --cask --force --zap foo") {
-		t.Fatalf("second line = %q", lines[1])
+	if lines[1] != "2026-05-25 10:02  uninstall  Foo" {
+		t.Fatalf("uninstall header = %q", lines[1])
+	}
+	if lines[2] != "  ran: brew uninstall --cask --force --zap foo" {
+		t.Fatalf("uninstall command detail = %q", lines[2])
+	}
+	if lines[3] != "  moved  4.0K  /Applications/Foo.app" {
+		t.Fatalf("uninstall moved detail = %q", lines[3])
+	}
+	if lines[4] != "  failed: /Users/test/Library/Application Scripts/com.example.foo" {
+		t.Fatalf("uninstall failed detail = %q", lines[4])
 	}
 	if strings.Contains(stdout.String(), "Old") {
 		t.Fatalf("history did not respect limit: %q", stdout.String())

@@ -99,7 +99,7 @@ Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear
 
 ## History
 
-`bm history` shows recent clean and uninstall activity from `~/Library/Logs/bloom`. Clean history reuses Bloom's clean log; uninstall history records actual Bloom-moved paths, failed paths, and Homebrew cask zap commands from confirmed uninstalls. Dry-run plans are not written to the uninstall history.
+`bm history` shows recent clean and uninstall activity from `~/Library/Logs/bloom`. Clean history reuses Bloom's clean log; uninstall history groups confirmed uninstall commands, Bloom-moved paths, and failed paths by operation for readability. Dry-run plans are not written to the uninstall history, and `--limit` limits the underlying history events before grouping.
 
 ## Config
 

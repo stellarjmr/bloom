@@ -19,6 +19,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Restored Homebrew cask `--zap` during `bm uninstall` so brew-installed apps are removed more completely.
 - Deduplicate uninstall scan results by bundle ID so backup or mirrored app clones do not appear alongside the live app.
 - Show the exact Homebrew cask `--zap` command in uninstall dry-runs and summaries when a cask is detected.
+- Group `bm history` uninstall output by operation for easier review.
 
 ## v0.6.17 - 2026-05-23
 

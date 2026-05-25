@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,9 +16,12 @@ import (
 const historyTimestampLayout = "2006-01-02T15:04:05-0700"
 
 type historyEntry struct {
-	when time.Time
-	seq  int
-	line string
+	when     time.Time
+	seq      int
+	line     string
+	groupKey string
+	header   string
+	detail   string
 }
 
 func (a *App) runHistory(args []string) int {
@@ -41,10 +45,36 @@ func (a *App) runHistory(args []string) int {
 		fmt.Fprintln(a.Out, "No Bloom history found yet. Run bm clean or bm uninstall first.")
 		return 0
 	}
-	for _, entry := range entries {
-		fmt.Fprintln(a.Out, entry.line)
-	}
+	printHistoryEntries(a.Out, entries)
 	return 0
+}
+
+func printHistoryEntries(out io.Writer, entries []historyEntry) {
+	printedGroups := map[string]bool{}
+	for _, entry := range entries {
+		if entry.groupKey == "" {
+			fmt.Fprintln(out, entry.line)
+			continue
+		}
+		if printedGroups[entry.groupKey] {
+			continue
+		}
+		printedGroups[entry.groupKey] = true
+		fmt.Fprintln(out, entry.header)
+
+		group := make([]historyEntry, 0, 4)
+		for _, candidate := range entries {
+			if candidate.groupKey == entry.groupKey {
+				group = append(group, candidate)
+			}
+		}
+		sort.SliceStable(group, func(i, j int) bool {
+			return group[i].seq < group[j].seq
+		})
+		for _, detail := range group {
+			fmt.Fprintf(out, "  %s\n", detail.detail)
+		}
+	}
 }
 
 func readHistoryEntries(limit int) []historyEntry {
@@ -123,26 +153,34 @@ func parseUninstallHistoryLine(line string, seq int) (historyEntry, bool) {
 	size := historySize(parts[5])
 	value := parts[6]
 
-	fields := []string{formatHistoryTime(when), "uninstall", appName}
+	header := strings.Join([]string{formatHistoryTime(when), "uninstall", appName}, "  ")
+	detail := ""
 	switch event {
 	case "command":
 		if status == "ok" {
-			fields = append(fields, "ran: "+value)
+			detail = "ran: " + value
 		} else {
-			fields = append(fields, "failed command: "+value)
+			detail = "failed command: " + value
 		}
 	case "moved":
-		fields = append(fields, "moved")
+		fields := []string{"moved"}
 		if size != "" {
 			fields = append(fields, size)
 		}
 		fields = append(fields, value)
+		detail = strings.Join(fields, "  ")
 	case "failed":
-		fields = append(fields, "failed: "+value)
+		detail = "failed: " + value
 	default:
-		fields = append(fields, event, status, value)
+		detail = strings.Join([]string{event, status, value}, "  ")
 	}
-	return historyEntry{when: when, seq: seq, line: strings.Join(fields, "  ")}, true
+	return historyEntry{
+		when:     when,
+		seq:      seq,
+		groupKey: parts[0] + "\tuninstall\t" + appName,
+		header:   header,
+		detail:   detail,
+	}, true
 }
 
 func parseHistoryTimestamp(value string) (time.Time, bool) {
