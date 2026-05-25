@@ -215,7 +215,7 @@ show_help() {
   printf '  %b%-28s%b %s\n' "$GREEN" "bm remove --list" "$NC" "List removable packages as TSV"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm remove --package npm:pkg" "$NC" "Remove one package from a task"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall" "$NC" "Remove apps and their leftovers"
-  printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall --list" "$NC" "List installable apps as TSV"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm uninstall --list" "$NC" "List installed apps as TSV"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm list" "$NC" "List configured tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm doctor" "$NC" "Check missing tools"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm config" "$NC" "Manage tasks and packages"
