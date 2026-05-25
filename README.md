@@ -36,6 +36,7 @@ bm uninstall --dry-run --app /Applications/Foo.app
 bm clean                     # move cleanable cache files to Trash
 bm clean --dry-run           # preview cleanable files without moving them
 bm clean --whitelist         # choose protected clean whitelist entries
+bm history                   # show recent clean and uninstall activity
 bm list                      # list configured tasks
 bm doctor                    # show available and missing tools
 bm config                    # open the interactive config menu
@@ -95,6 +96,10 @@ Dry runs and uninstall summaries print the exact Homebrew zap command when a cas
 After the batch completes Bloom rewrites the Dock plist, restarts Dock, rebuilds the LaunchServices database, and runs `brew autoremove` if any cask was removed.
 
 Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear in the menu.
+
+## History
+
+`bm history` shows recent clean and uninstall activity from `~/Library/Logs/bloom`. Clean history reuses Bloom's clean log; uninstall history records actual Bloom-moved paths, failed paths, and Homebrew cask zap commands from confirmed uninstalls. Dry-run plans are not written to the uninstall history.
 
 ## Config
 

@@ -206,6 +206,7 @@ show_help() {
   printf '  %b%-28s%b %s\n' "$GREEN" "bm clean" "$NC" "Move cleanable cache files to Trash"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm clean --dry-run" "$NC" "Preview cleanable files"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm clean --whitelist" "$NC" "Choose clean whitelist"
+  printf '  %b%-28s%b %s\n' "$GREEN" "bm history" "$NC" "Show recent clean and uninstall activity"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update" "$NC" "Run enabled update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --dry-run" "$NC" "Preview update tasks"
   printf '  %b%-28s%b %s\n' "$GREEN" "bm update --only nvim" "$NC" "Run one task"
@@ -1074,7 +1075,7 @@ case "${1:-}" in
     core "$@"
   fi
   ;;
-"update" | "check" | "list" | "doctor" | "remove" | "uninstall")
+"update" | "check" | "list" | "doctor" | "remove" | "uninstall" | "history")
   core "$@"
   ;;
 *)

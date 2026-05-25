@@ -47,6 +47,8 @@ func (a *App) Run(args []string) int {
 		return a.runConfig(args[1:])
 	case "clean":
 		return a.runClean(args[1:])
+	case "history":
+		return a.runHistory(args[1:])
 	case "list":
 		return a.runList(args[1:])
 	case "doctor":
@@ -72,6 +74,7 @@ func (a *App) printHelp() {
 Usage:
   bm check [--format tree|tsv] [--config path]
   bm clean [--dry-run] [--whitelist] [--config path]
+  bm history [--limit N]
   bm remove [--list] [--dry-run] [--package task:package]...
   bm update [--dry-run] [--only task] [--skip task] [--package task:package] [--config path]
   bm uninstall [--list] [--dry-run] [--app /path/to/App.app]...

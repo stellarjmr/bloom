@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Added
+
+- Added `bm history` to review recent clean and uninstall activity from Bloom's local operation logs.
+
 ### Changed
 
 - Restored Homebrew cask `--zap` during `bm uninstall` so brew-installed apps are removed more completely.

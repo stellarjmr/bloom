@@ -1281,7 +1281,7 @@ func logCleanOperation(mode, sizeKB, status, target string) {
 	if err != nil || home == "" {
 		return
 	}
-	logFile := filepath.Join(home, "Library", "Logs", "bloom", "clean.log")
+	logFile := bloomLogFile(home, "clean.log")
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return
 	}

@@ -169,6 +169,66 @@ func TestRunCheckOutputsTSV(t *testing.T) {
 	}
 }
 
+func TestRunHistoryReportsNoLogs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := App{Out: &stdout, Err: &stderr}
+	code := app.Run([]string{"history"})
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No Bloom history found yet") {
+		t.Fatalf("stdout = %q, want no-history message", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunHistoryShowsRecentCleanAndUninstallLogs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logDir := bloomLogDir(home)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cleanLog := strings.Join([]string{
+		"2026-05-25T10:01:00+0800\ttrash\t2048\tok\t/Users/test/Library/Caches/Old",
+		"2026-05-25T10:03:00+0800\ttrash\t16\terror\t/Users/test/Library/Caches/New",
+	}, "\n") + "\n"
+	uninstallLog := "2026-05-25T10:02:00+0800\tuninstall\tFoo\tcommand\tok\t0\tbrew uninstall --cask --force --zap foo\n"
+	if err := os.WriteFile(bloomLogFile(home, "clean.log"), []byte(cleanLog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bloomLogFile(home, "uninstall.log"), []byte(uninstallLog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := App{Out: &stdout, Err: &stderr}
+	code := app.Run([]string{"history", "--limit", "2"})
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("history lines = %#v, want 2", lines)
+	}
+	if !strings.Contains(lines[0], "2026-05-25 10:03  clean  failed  16.0K") {
+		t.Fatalf("newest line = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "2026-05-25 10:02  uninstall  Foo  ran: brew uninstall --cask --force --zap foo") {
+		t.Fatalf("second line = %q", lines[1])
+	}
+	if strings.Contains(stdout.String(), "Old") {
+		t.Fatalf("history did not respect limit: %q", stdout.String())
+	}
+}
+
 func TestProtectedAppPathSkipsSystemRootsAndSymlinkTargets(t *testing.T) {
 	if !isProtectedAppPath("/System/Library/CoreServices/Applications/Feedback Assistant.app") {
 		t.Fatal("system-root app was not protected")
@@ -919,6 +979,17 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 			t.Fatalf("trashed path %q missing: %v", path, err)
 		}
 	}
+	if len(res.Moved) != 3 {
+		t.Fatalf("moved paths = %#v, want 3 Bloom-moved paths", res.Moved)
+	}
+	logData, err := os.ReadFile(bloomLogFile(home, "uninstall.log"))
+	if err != nil {
+		t.Fatalf("uninstall log missing: %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "\tuninstall\tFoo\tmoved\tok\t") || !strings.Contains(logText, appPath) || !strings.Contains(logText, cachePath) || !strings.Contains(logText, launchAgentPath) {
+		t.Fatalf("uninstall log missing moved paths: %q", logText)
+	}
 }
 
 func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
@@ -1015,6 +1086,52 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewUninstallRemovesPaths(t *testing.T
 	}
 	if !runnerCallContains(r.calls, "brew uninstall --cask --force --zap foo") {
 		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
+	}
+}
+
+func TestBatchUninstallHistoryDoesNotLogBrewRemovedPathsAsMoved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	appPath := filepath.Join(home, "Applications", "foo.app")
+	appFile := filepath.Join(appPath, "Contents", "MacOS", "foo")
+	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	cacheFile := filepath.Join(cachePath, "cache.db")
+	for _, path := range []string{appFile, cacheFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := &brewCaskUninstallRunner{
+		appPath:              appPath,
+		uninstallRemovePaths: []string{appPath, cachePath},
+	}
+	summary := BatchUninstall(context.Background(), r, []AppEntry{{
+		Path:     appPath,
+		Name:     "foo",
+		BundleID: "com.example.foo",
+	}}, false)
+	if len(summary.Results) != 1 || summary.Results[0].Err != nil {
+		t.Fatalf("summary = %#v", summary.Results)
+	}
+	if len(summary.Results[0].Moved) != 0 {
+		t.Fatalf("brew-removed paths were recorded as Bloom-moved: %#v", summary.Results[0].Moved)
+	}
+	logData, err := os.ReadFile(bloomLogFile(home, "uninstall.log"))
+	if err != nil {
+		t.Fatalf("uninstall log missing: %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "\tuninstall\tfoo\tcommand\tok\t0\tbrew uninstall --cask --force --zap foo") {
+		t.Fatalf("uninstall log missing brew command: %q", logText)
+	}
+	if strings.Contains(logText, "\tmoved\t") {
+		t.Fatalf("uninstall log should not report brew-removed paths as moved: %q", logText)
 	}
 }
 

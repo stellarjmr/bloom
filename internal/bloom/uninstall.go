@@ -38,12 +38,18 @@ type UninstallResult struct {
 	App          AppEntry
 	RemovedKB    int64
 	Files        []string
+	Moved        []UninstallMovedPath
 	Failed       []string
 	Err          error
 	BrewCask     string
 	BrewRemoved  bool
 	AppRemoved   bool
 	StillRunning bool
+}
+
+type UninstallMovedPath struct {
+	Path   string
+	SizeKB int64
 }
 
 // BatchSummary aggregates per-app results plus shared post-batch effects.
@@ -947,6 +953,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			continue
 		}
 		res.Files = append(res.Files, p)
+		res.Moved = append(res.Moved, UninstallMovedPath{Path: p, SizeKB: size})
 		res.RemovedKB += size
 		if p == app.Path {
 			res.AppRemoved = true
@@ -987,6 +994,9 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 	for _, app := range apps {
 		res := UninstallApp(ctx, runner, app, dryRun)
 		sum.Results = append(sum.Results, res)
+		if !dryRun {
+			logUninstallResult(res)
+		}
 		sum.TotalRemovedKB += res.RemovedKB
 		if res.Err == nil && (dryRun || res.AppRemoved) {
 			successfulApps = append(successfulApps, app)

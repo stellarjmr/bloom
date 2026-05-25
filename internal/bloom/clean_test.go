@@ -86,6 +86,7 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		filepath.Join(home, "Library", "Containers", "com.lmstudio.lmstudio", "Data", "models", "model.gguf"),
 		filepath.Join(home, ".config", "gcloud", "logs", "gcloud.log"),
 		filepath.Join(home, ".config", "tool", "settings.json"),
+		filepath.Join(home, "Library", "Logs", "bloom", "uninstall.log"),
 		filepath.Join(home, "Pictures", "Photos Library.photoslibrary", "database", "Photos.sqlite"),
 	}
 
