@@ -92,6 +92,7 @@ func ScanApplications(ctx context.Context) ([]AppEntry, error) {
 		walkAppDir(ctx, root, seen, &apps)
 	}
 
+	apps = dedupeAppEntriesByBundleID(apps, home)
 	sort.Slice(apps, func(i, j int) bool {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
@@ -147,6 +148,83 @@ func addAppEntry(path string, seen map[string]bool, out *[]AppEntry) {
 	entry.SizeKB = directorySizeKB(path)
 	entry.LastUsedEpoch = readLastUsedEpoch(path)
 	*out = append(*out, entry)
+}
+
+func dedupeAppEntriesByBundleID(apps []AppEntry, home string) []AppEntry {
+	if len(apps) < 2 {
+		return apps
+	}
+	byBundleID := map[string]int{}
+	out := make([]AppEntry, 0, len(apps))
+	for _, app := range apps {
+		bundleID := strings.ToLower(strings.TrimSpace(app.BundleID))
+		if bundleID == "" {
+			out = append(out, app)
+			continue
+		}
+		idx, ok := byBundleID[bundleID]
+		if !ok {
+			byBundleID[bundleID] = len(out)
+			out = append(out, app)
+			continue
+		}
+		if appScanPreferenceRank(app.Path, home) < appScanPreferenceRank(out[idx].Path, home) {
+			out[idx] = app
+		}
+	}
+	return out
+}
+
+func appScanPreferenceRank(path, home string) int {
+	cleaned := filepath.Clean(path)
+	roots := expandedAppScanRoots(home)
+	for i, root := range roots {
+		if appPathIsDirectChildOfRoot(cleaned, root) {
+			return i
+		}
+	}
+	for i, root := range roots {
+		if pathIsWithinRoot(cleaned, root) {
+			return len(roots) + i
+		}
+	}
+	return len(roots) * 2
+}
+
+func expandedAppScanRoots(home string) []string {
+	roots := make([]string, 0, len(defaultAppDirs))
+	for _, dir := range defaultAppDirs {
+		root := dir
+		if strings.HasPrefix(root, "~") && home != "" {
+			root = filepath.Join(home, root[1:])
+		}
+		roots = append(roots, filepath.Clean(root))
+	}
+	return roots
+}
+
+func appPathIsDirectChildOfRoot(path, root string) bool {
+	rel, ok := relativePathWithinRoot(path, root)
+	if !ok || rel == "." || strings.Contains(rel, string(os.PathSeparator)) {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(rel), ".app")
+}
+
+func pathIsWithinRoot(path, root string) bool {
+	_, ok := relativePathWithinRoot(path, root)
+	return ok
+}
+
+func relativePathWithinRoot(path, root string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return rel, true
 }
 
 // readLastUsedEpoch returns the bundle's Spotlight kMDItemLastUsedDate as a

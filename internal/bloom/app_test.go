@@ -198,6 +198,42 @@ func TestProtectedAppPathAllowsUserInstalledAppleApps(t *testing.T) {
 	}
 }
 
+func TestDedupeAppEntriesByBundleIDPrefersLiveRoots(t *testing.T) {
+	home := filepath.Join(string(os.PathSeparator), "Users", "test")
+	apps := []AppEntry{
+		{Path: "/Applications/Backup/Foo.app", Name: "Foo Backup", BundleID: "COM.EXAMPLE.FOO"},
+		{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo Home", BundleID: "com.example.foo"},
+		{Path: "/Applications/Setapp/Foo.app", Name: "Foo Setapp", BundleID: "com.example.foo"},
+		{Path: "/Applications/Foo.app", Name: "Foo", BundleID: "com.example.foo"},
+		{Path: "/Applications/NoID.app", Name: "NoID"},
+		{Path: "/Applications/NoID Clone.app", Name: "NoID Clone"},
+	}
+
+	got := dedupeAppEntriesByBundleID(apps, home)
+	if len(got) != 3 {
+		t.Fatalf("deduped app count = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Path != "/Applications/Foo.app" {
+		t.Fatalf("preferred duplicate path = %q, want /Applications/Foo.app", got[0].Path)
+	}
+	if got[1].Path != "/Applications/NoID.app" || got[2].Path != "/Applications/NoID Clone.app" {
+		t.Fatalf("apps without bundle IDs should be preserved in order: %#v", got)
+	}
+}
+
+func TestDedupeAppEntriesByBundleIDTreatsSetappAsLiveRoot(t *testing.T) {
+	home := filepath.Join(string(os.PathSeparator), "Users", "test")
+	apps := []AppEntry{
+		{Path: "/Applications/Backup/Foo.app", Name: "Foo Backup", BundleID: "com.example.foo"},
+		{Path: "/Applications/Setapp/Foo.app", Name: "Foo Setapp", BundleID: "com.example.foo"},
+	}
+
+	got := dedupeAppEntriesByBundleID(apps, home)
+	if len(got) != 1 || got[0].Path != "/Applications/Setapp/Foo.app" {
+		t.Fatalf("deduped apps = %#v, want Setapp app", got)
+	}
+}
+
 func TestUninstallAppBlocksOfficialUninstallerApps(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
