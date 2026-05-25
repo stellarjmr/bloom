@@ -837,7 +837,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		if dryRun {
 			res.BrewRemoved = true
 		} else {
-			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", cask)
+			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", "--zap", cask)
 			if out.Err == nil && !brewCaskStillInstalled(ctx, runner, cask) {
 				res.BrewRemoved = true
 			}

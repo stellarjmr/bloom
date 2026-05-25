@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Changed
+
+- Restored Homebrew cask `--zap` during `bm uninstall` so brew-installed apps are removed more completely.
+
 ## v0.6.17 - 2026-05-23
 
 ### Added

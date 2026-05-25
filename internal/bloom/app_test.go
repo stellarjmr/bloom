@@ -898,7 +898,7 @@ func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
 	}
 }
 
-func TestUninstallAppUsesBrewCaskWithoutZap(t *testing.T) {
+func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
@@ -922,14 +922,11 @@ func TestUninstallAppUsesBrewCaskWithoutZap(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("uninstall error = %v", res.Err)
 	}
-	if !runnerCallContains(r.calls, "brew uninstall --cask --force foo") {
-		t.Fatalf("brew uninstall without zap was not called: %#v", r.calls)
+	if !runnerCallContains(r.calls, "brew uninstall --cask --force --zap foo") {
+		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
 	}
-	if runnerCallContains(r.calls, "--zap") {
-		t.Fatalf("brew uninstall used zap: %#v", r.calls)
-	}
-	if _, err := os.Stat(configPath); err != nil {
-		t.Fatalf("~/.config file should remain after uninstall: %v", err)
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("~/.config file should be removed by brew zap; stat err = %v", err)
 	}
 }
 
@@ -977,11 +974,8 @@ func TestUninstallAppKeepsPlannedStatsWhenBrewUninstallRemovesPaths(t *testing.T
 	if res.RemovedKB == 0 {
 		t.Fatalf("removed size = 0, want planned size from paths removed by brew uninstall")
 	}
-	if !runnerCallContains(r.calls, "brew uninstall --cask --force foo") {
-		t.Fatalf("brew uninstall without zap was not called: %#v", r.calls)
-	}
-	if runnerCallContains(r.calls, "--zap") {
-		t.Fatalf("brew uninstall used zap: %#v", r.calls)
+	if !runnerCallContains(r.calls, "brew uninstall --cask --force --zap foo") {
+		t.Fatalf("brew uninstall with zap was not called: %#v", r.calls)
 	}
 }
 
@@ -1100,13 +1094,7 @@ func (r *brewCaskUninstallRunner) Run(_ context.Context, name string, args ...st
 		return CommandOutput{Stdout: "foo\n"}
 	case "brew info --cask foo":
 		return CommandOutput{Stdout: r.appPath + "\n"}
-	case "brew uninstall --cask --force foo":
-		for _, path := range r.uninstallRemovePaths {
-			_ = os.RemoveAll(path)
-		}
-		r.uninstalled = true
-		return CommandOutput{}
-	case "brew uninstall --cask --zap --force foo":
+	case "brew uninstall --cask --force --zap foo":
 		for _, path := range r.uninstallRemovePaths {
 			_ = os.RemoveAll(path)
 		}
