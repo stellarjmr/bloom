@@ -1053,6 +1053,95 @@ func TestUninstallAppSkipsRelatedFilesWhenBundleMoveFails(t *testing.T) {
 	}
 }
 
+func TestUninstallAppUsesAdminTrashMoveForProtectedBundle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	appDir := filepath.Join(home, "Applications")
+	appPath := filepath.Join(appDir, "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	cacheFile := filepath.Join(cachePath, "cache.db")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheFile, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(appDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(appDir, 0o755)
+
+	r := &adminTrashRunner{appPath: appPath}
+	res := UninstallApp(context.Background(), r, AppEntry{
+		Path:     appPath,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	}, false)
+	if res.Err != nil {
+		t.Fatalf("uninstall error = %v", res.Err)
+	}
+	if !res.AppRemoved {
+		t.Fatal("AppRemoved = false, want true after admin Trash move")
+	}
+	if !runnerCallContains(r.calls, "/usr/bin/sudo /bin/mv -n "+appPath) {
+		t.Fatalf("admin Trash move was not called: %#v", r.calls)
+	}
+	for _, path := range []string{appPath, cachePath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("original path %q still exists or stat failed unexpectedly: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".Trash", "Foo.app", "Contents", "Info.plist"),
+		filepath.Join(home, ".Trash", "com.example.foo", "cache.db"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("trashed path %q missing: %v", path, err)
+		}
+	}
+}
+
+func TestUninstallAppKeepsRelatedFilesWhenAdminTrashMoveFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	appDir := filepath.Join(home, "Applications")
+	appPath := filepath.Join(appDir, "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	cacheFile := filepath.Join(cachePath, "cache.db")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheFile, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(appDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(appDir, 0o755)
+
+	r := &adminTrashRunner{appPath: appPath, mvErr: errors.New("sudo denied")}
+	res := UninstallApp(context.Background(), r, AppEntry{
+		Path:     appPath,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	}, false)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "skipped related files") {
+		t.Fatalf("uninstall error = %v, want skipped-related-files failure", res.Err)
+	}
+	if res.AppRemoved || len(res.Moved) != 0 || len(res.Files) != 0 {
+		t.Fatalf("paths were removed despite admin Trash failure: %#v", res)
+	}
+	for _, path := range []string{appPath, cachePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("path should remain after admin Trash failure %q: %v", path, err)
+		}
+	}
+}
+
 func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1302,6 +1391,50 @@ func TestRemoveAppsFromDockMatchesBundleIDAcrossDockArrays(t *testing.T) {
 	}
 	if !runnerCallContains(r.calls, "/usr/bin/killall Dock") {
 		t.Fatalf("Dock was not restarted after deletion; calls = %#v", r.calls)
+	}
+}
+
+type adminTrashRunner struct {
+	appPath string
+	mvErr   error
+	calls   []string
+}
+
+func (r *adminTrashRunner) LookPath(string) (string, error) {
+	return "", errNotFound
+}
+
+func (r *adminTrashRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	return CommandOutput{Err: errNotFound}
+}
+
+func (r *adminTrashRunner) RunInteractive(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	if name != "/usr/bin/sudo" || len(args) == 0 {
+		return CommandOutput{Err: errNotFound}
+	}
+	switch args[0] {
+	case "/bin/mv":
+		if r.mvErr != nil {
+			return CommandOutput{Err: r.mvErr}
+		}
+		if len(args) != 4 || args[1] != "-n" || args[2] != r.appPath {
+			return CommandOutput{Err: errors.New("unexpected sudo mv")}
+		}
+		if err := os.Chmod(filepath.Dir(r.appPath), 0o755); err != nil {
+			return CommandOutput{Err: err}
+		}
+		if err := os.Rename(args[2], args[3]); err != nil {
+			return CommandOutput{Err: err}
+		}
+		return CommandOutput{}
+	case "/usr/sbin/chown", "/bin/chmod", "/bin/mkdir":
+		return CommandOutput{}
+	default:
+		return CommandOutput{Err: errNotFound}
 	}
 }
 

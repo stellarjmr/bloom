@@ -957,7 +957,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			}
 			return res.AppRemoved
 		}
-		if err := movePathToTrashStubborn(ctx, runner, app.Path); err != nil {
+		if err := moveAppBundleToTrash(ctx, runner, app.Path); err != nil {
 			res.Failed = append(res.Failed, app.Path)
 			return false
 		}
@@ -1631,6 +1631,82 @@ func isValidCaskToken(token string) bool {
 		}
 	}
 	return true
+}
+
+func moveAppBundleToTrash(ctx context.Context, runner Runner, appPath string) error {
+	err := movePathToTrashStubborn(ctx, runner, appPath)
+	if err == nil {
+		return nil
+	}
+	if os.Getenv("BLOOM_TEST_TRASH_DIR") != "" {
+		return err
+	}
+	return moveAppBundleToTrashWithAdmin(ctx, runner, appPath)
+}
+
+func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath string) error {
+	if err := validateTrashMovePath(appPath); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(strings.ToLower(filepath.Base(appPath)), ".app") {
+		return fmt.Errorf("not an app bundle: %s", appPath)
+	}
+	if isProtectedAppPath(appPath) {
+		return fmt.Errorf("protected app bundle: %s", appPath)
+	}
+	info, err := os.Lstat(appPath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing admin Trash move for symlink app bundle: %s", appPath)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || home == string(os.PathSeparator) || home == "/var/root" {
+		return errors.New("user Trash unavailable")
+	}
+	trashDir := filepath.Join(home, ".Trash")
+	if info, err := os.Lstat(trashDir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Trash is a symlink: %s", trashDir)
+	}
+	createdTrashWithAdmin := false
+	if err := os.MkdirAll(trashDir, 0o700); err != nil {
+		out := runInteractive(ctx, runner, "/usr/bin/sudo", "/bin/mkdir", "-p", trashDir)
+		if out.Err != nil {
+			return fmt.Errorf("could not create Trash: %w", out.Err)
+		}
+		createdTrashWithAdmin = true
+	}
+	if info, err := os.Lstat(trashDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Trash is not a normal directory: %s", trashDir)
+	}
+
+	owner := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	_ = os.Chmod(trashDir, 0o700)
+	if createdTrashWithAdmin {
+		_ = runInteractive(ctx, runner, "/usr/bin/sudo", "/bin/chmod", "700", trashDir)
+		_ = runInteractive(ctx, runner, "/usr/bin/sudo", "/usr/sbin/chown", owner, trashDir)
+	}
+
+	dest, err := uniqueTrashDestination(trashDir, filepath.Base(appPath))
+	if err != nil {
+		return err
+	}
+	out := runInteractive(ctx, runner, "/usr/bin/sudo", "/bin/mv", "-n", appPath, dest)
+	if out.Err != nil {
+		return fmt.Errorf("sudo Trash move failed: %w", out.Err)
+	}
+	if _, err := os.Lstat(appPath); err == nil {
+		return fmt.Errorf("source still exists after admin Trash move: %s", appPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("could not verify app bundle removal: %w", err)
+	}
+	if _, err := os.Lstat(dest); err != nil {
+		return fmt.Errorf("Trash destination missing after admin move: %w", err)
+	}
+	_ = runInteractive(ctx, runner, "/usr/bin/sudo", "/usr/sbin/chown", "-R", owner, dest)
+	return nil
 }
 
 // movePathToTrashStubborn moves p to Trash, retrying after clearing common

@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Changed
+
+- Support administrator-authorized Trash moves for root-owned app bundles, including Mac App Store apps, without requiring external uninstall tools.
+
 ### Fixed
 
 - Prevent `bm uninstall` from partially moving sandbox leftovers when the app bundle itself cannot be moved to Trash.

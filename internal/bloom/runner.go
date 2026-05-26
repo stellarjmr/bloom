@@ -3,6 +3,7 @@ package bloom
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -10,6 +11,10 @@ import (
 type Runner interface {
 	LookPath(file string) (string, error)
 	Run(ctx context.Context, name string, args ...string) CommandOutput
+}
+
+type InteractiveRunner interface {
+	RunInteractive(ctx context.Context, name string, args ...string) CommandOutput
 }
 
 type CommandOutput struct {
@@ -48,6 +53,14 @@ func (OSRunner) Run(ctx context.Context, name string, args ...string) CommandOut
 	}
 }
 
+func (OSRunner) RunInteractive(ctx context.Context, name string, args ...string) CommandOutput {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return CommandOutput{Err: cmd.Run()}
+}
+
 type cachedRunner struct {
 	runner  Runner
 	mu      sync.Mutex
@@ -80,4 +93,18 @@ func (r *cachedRunner) LookPath(file string) (string, error) {
 
 func (r *cachedRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
 	return r.runner.Run(ctx, name, args...)
+}
+
+func (r *cachedRunner) RunInteractive(ctx context.Context, name string, args ...string) CommandOutput {
+	if interactive, ok := r.runner.(InteractiveRunner); ok {
+		return interactive.RunInteractive(ctx, name, args...)
+	}
+	return r.runner.Run(ctx, name, args...)
+}
+
+func runInteractive(ctx context.Context, runner Runner, name string, args ...string) CommandOutput {
+	if interactive, ok := runner.(InteractiveRunner); ok {
+		return interactive.RunInteractive(ctx, name, args...)
+	}
+	return runner.Run(ctx, name, args...)
 }
