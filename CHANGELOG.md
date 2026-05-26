@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.19 - 2026-05-26
+
 ### Changed
 
 - Support administrator-authorized Trash moves for root-owned app bundles, including Mac App Store apps, without requiring external uninstall tools.
