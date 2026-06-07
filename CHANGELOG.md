@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Changed
+
+- Build release `bm-core` binaries with CGO disabled so release artifacts stay pure-Go across macOS SDK changes.
+
 ### Fixed
 
 - Include per-app `~/Library/Application Support/CrashReporter/*.plist` leftovers in `bm uninstall` cleanup plans.
