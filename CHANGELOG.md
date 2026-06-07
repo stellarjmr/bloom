@@ -12,6 +12,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ### Fixed
 
+- Include per-app `~/Library/Application Support/CrashReporter/*.plist` leftovers in `bm uninstall` cleanup plans.
 - Protect Raycast cache/state paths from `bm clean` because recent Raycast cache layouts may contain user data.
 
 ## v0.6.19 - 2026-05-26

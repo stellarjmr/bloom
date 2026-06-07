@@ -535,6 +535,7 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 	matchGroupContainers(app, &paths)
 	matchDiagnosticReports(app, &paths)
+	matchCrashReporterPlists(app, &paths)
 	matchVSCodePaths(app, &paths)
 
 	// Preferences: <bundleID>.plist + ByHost variants
@@ -879,6 +880,64 @@ func diagnosticReportNameMatches(name string, prefixes []string) bool {
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(lower, prefix+".") || strings.HasPrefix(lower, prefix+"_") || strings.HasPrefix(lower, prefix+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+func matchCrashReporterPlists(app AppEntry, out *[]string) {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return
+	}
+	dir := filepath.Join(home, "Library", "Application Support", "CrashReporter")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefixes := crashReporterPrefixes(app)
+	if len(prefixes) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !crashReporterNameMatches(entry.Name(), prefixes) {
+			continue
+		}
+		*out = append(*out, filepath.Join(dir, entry.Name()))
+	}
+}
+
+func crashReporterPrefixes(app AppEntry) []string {
+	values := []string{
+		app.Name,
+		strings.ReplaceAll(app.Name, " ", ""),
+		readBundleExecutable(app.Path),
+	}
+	prefixes := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) < 3 {
+			continue
+		}
+		value = strings.ToLower(value)
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		prefixes = append(prefixes, value)
+	}
+	return prefixes
+}
+
+func crashReporterNameMatches(name string, prefixes []string) bool {
+	lower := strings.ToLower(name)
+	if filepath.Ext(lower) != ".plist" {
+		return false
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix+"_") {
 			return true
 		}
 	}

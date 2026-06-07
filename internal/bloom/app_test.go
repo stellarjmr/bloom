@@ -535,6 +535,39 @@ func TestFindRelatedPathsIncludesDiagnostics(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsIncludesCrashReporterPlists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Foo App.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	crashReporterDir := filepath.Join(home, "Library", "Application Support", "CrashReporter")
+	if err := os.MkdirAll(crashReporterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(crashReporterDir, "Foo App_AAAA-BBBB.plist"),
+		filepath.Join(crashReporterDir, "FooApp_CCCC-DDDD.plist"),
+	}
+	unrelated := filepath.Join(crashReporterDir, "OtherApp_EEEE-FFFF.plist")
+	for _, path := range append(want, unrelated) {
+		if err := os.WriteFile(path, []byte("crash reporter"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo App", BundleID: "com.example.foo"})
+	for _, path := range want {
+		if !containsString(paths, path) {
+			t.Fatalf("paths missing CrashReporter plist %q: %#v", path, paths)
+		}
+	}
+	if containsString(paths, unrelated) {
+		t.Fatalf("paths included unrelated CrashReporter plist %q: %#v", unrelated, paths)
+	}
+}
+
 func TestFindRelatedPathsIncludesVSCodeStablePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
