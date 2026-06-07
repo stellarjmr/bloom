@@ -81,6 +81,9 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		filepath.Join(home, "Library", "Application Support", "AddressBook", "AddressBook-v22.abcddb"),
 		filepath.Join(home, "Library", "Application Support", "MobileSync", "Backup", "device", "Manifest.db"),
 		filepath.Join(home, "Library", "Application Support", "Spotify", "PersistentCache", "offline.bnk"),
+		filepath.Join(home, "Library", "Application Support", "Raycast", "ai-chat-state.db"),
+		filepath.Join(home, "Library", "Caches", "com.raycast.macos", "urlcache", "state.db"),
+		filepath.Join(home, "Library", "Caches", "com.raycast.shared", "fsCachedData", "state.db"),
 		filepath.Join(home, "Library", "Containers", "com.dropbox.DropboxMacUpdate", "Data", "Documents", "state.db"),
 		filepath.Join(home, "Library", "Containers", "com.microsoft.OneDrive-mac", "Data", "Documents", "state.db"),
 		filepath.Join(home, "Library", "Containers", "com.lmstudio.lmstudio", "Data", "models", "model.gguf"),
@@ -97,6 +100,31 @@ func TestCleanHardProtectsHighValueData(t *testing.T) {
 		if err := validateCleanPath(path); err == nil {
 			t.Fatalf("validateCleanPath(%q) succeeded, want protected rejection", path)
 		}
+	}
+}
+
+func TestRunCleanDoesNotTargetRaycastCacheState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	raycastState := filepath.Join(home, "Library", "Caches", "com.raycast.macos", "urlcache", "state.db")
+	dropFile := filepath.Join(home, "Library", "Caches", "DropApp", "data.tmp")
+	for _, path := range []string{raycastState, dropFile} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	if !cleanResultContains(res, filepath.Dir(dropFile)) {
+		t.Fatalf("dry-run targets missing DropApp: %#v", res.Targets)
+	}
+	if cleanResultCovers(res, raycastState) || cleanResultContains(res, filepath.Dir(filepath.Dir(raycastState))) {
+		t.Fatalf("Raycast cache state appeared in clean targets: targets=%#v skipped=%#v", res.Targets, res.Skipped)
 	}
 }
 

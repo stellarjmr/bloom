@@ -936,6 +936,7 @@ func shouldProtectCleanData(token string) bool {
 		"com.dropbox.*", "com.getdropbox.*", "*dropbox*", "com.google.GoogleDrive", "*GoogleDrive*", "com.microsoft.OneDrive*", "*OneDrive*",
 		"com.jetbrains.*", "JetBrains*", "com.microsoft.*", "com.visualstudio.*",
 		"com.sublimetext.*", "com.sublimehq.*", "Cursor", "Claude", "com.anthropic.claude*", "ChatGPT", "com.openai.codex", "Codex", "codex-runtimes", "Ollama", "com.ollama.ollama", "com.lmstudio.lmstudio", "LM Studio", "com.exafunction.windsurf",
+		"com.raycast.*", "Raycast", "raycast",
 		"com.clash.app", "com.nssurge.*", "com.v2ray.*", "com.clash.*", "ClashX*", "Surge*", "Shadowrocket*", "Quantumult*", "mihomo*", "*openvpn*", "*OpenVPN*",
 		"clash-*", "Clash-*", "*-clash", "*-Clash", "clash.*", "Clash.*", "clash_*", "*clash-verge*", "*Clash-Verge*", "clashverge*", "ClashVerge*",
 		"*nordvpn*", "*expressvpn*", "*protonvpn*", "*surfshark*", "*windscribe*", "*mullvad*", "*ShadowsocksX-NG*", "*v2box*", "*nekoray*", "*sing-box*", "*hiddify*", "*loon*", "*Loon*", "*zerotier*", "com.zerotier.*", "*cloudflare*warp*", "org.amnezia.*",
