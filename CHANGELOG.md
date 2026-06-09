@@ -16,6 +16,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ### Fixed
 
+- Avoid running duplicate `brew update` commands during one `bm update` and retry briefly when Homebrew's update lock is busy.
 - Include per-app `~/Library/Application Support/CrashReporter/*.plist` leftovers in `bm uninstall` cleanup plans.
 - Protect Raycast cache/state paths from `bm clean` because recent Raycast cache layouts may contain user data.
 

@@ -719,7 +719,8 @@ func (a *App) runUpdate(args []string) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	opts := UpdateOptions{DryRun: *dryRun, Config: cfg}
+	homebrewMetadataUpdated := false
+	opts := UpdateOptions{DryRun: *dryRun, Config: cfg, HomebrewMetadataUpdated: &homebrewMetadataUpdated}
 	results := make([]TaskResult, 0, len(tasks))
 	progress := NewProgress(a.Out, cfg)
 

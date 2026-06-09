@@ -3,6 +3,7 @@ package bloom
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -171,6 +172,31 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) Co
 	return r.outputs[call]
 }
 
+type sequenceRunner struct {
+	paths   map[string]bool
+	outputs map[string][]CommandOutput
+	calls   []string
+}
+
+func (r *sequenceRunner) LookPath(file string) (string, error) {
+	if r.paths[file] {
+		return "/bin/" + file, nil
+	}
+	return "", errNotFound
+}
+
+func (r *sequenceRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, call)
+	seq := r.outputs[call]
+	if len(seq) == 0 {
+		return CommandOutput{}
+	}
+	out := seq[0]
+	r.outputs[call] = seq[1:]
+	return out
+}
+
 var errNotFound = &runnerError{"not found"}
 
 type runnerError struct {
@@ -202,6 +228,75 @@ func TestRunBrewFormulaeUpdatesMetadataBeforeOutdated(t *testing.T) {
 		"brew list --formula --full-name",
 		"brew upgrade stellarjmr/tool/bloom",
 	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunBrewFormulaeAndCasksShareMetadataUpdate(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string]CommandOutput{
+			"brew update":                           {},
+			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
+			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
+			"brew upgrade stellarjmr/tool/bloom":    {},
+			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
+			"brew upgrade --cask --greedy iterm2":   {},
+		},
+	}
+	metadataUpdated := false
+	opts := UpdateOptions{Config: DefaultConfig(), HomebrewMetadataUpdated: &metadataUpdated}
+
+	brew := runBrewFormulae(context.Background(), r, opts)
+	if brew.Err != nil {
+		t.Fatal(brew.Err)
+	}
+	cask := runBrewCasks(context.Background(), r, opts)
+	if cask.Err != nil {
+		t.Fatal(cask.Err)
+	}
+
+	want := []string{
+		"brew update",
+		"brew outdated --quiet --formula",
+		"brew list --formula --full-name",
+		"brew upgrade stellarjmr/tool/bloom",
+		"brew outdated --quiet --cask --greedy",
+		"brew upgrade --cask --greedy iterm2",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+	if !metadataUpdated {
+		t.Fatal("metadata update state was not recorded")
+	}
+}
+
+func TestRunHomebrewUpdateRetriesBusyLock(t *testing.T) {
+	oldDelay := homebrewUpdateLockRetryDelay
+	oldRetries := homebrewUpdateLockMaxRetries
+	homebrewUpdateLockRetryDelay = 0
+	homebrewUpdateLockMaxRetries = 1
+	t.Cleanup(func() {
+		homebrewUpdateLockRetryDelay = oldDelay
+		homebrewUpdateLockMaxRetries = oldRetries
+	})
+	r := &sequenceRunner{
+		paths: map[string]bool{"brew": true},
+		outputs: map[string][]CommandOutput{
+			"brew update": {
+				{Err: errors.New("exit status 1"), Stderr: "lockf: 200: already locked\nError: Another `brew update` process is already running."},
+				{},
+			},
+		},
+	}
+
+	out := runHomebrewUpdate(context.Background(), r)
+	if out.Err != nil {
+		t.Fatalf("runHomebrewUpdate returned error after retry: %v", out.Err)
+	}
+	want := []string{"brew update", "brew update"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", r.calls, want)
 	}

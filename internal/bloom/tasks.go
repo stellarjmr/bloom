@@ -21,8 +21,9 @@ const (
 )
 
 type UpdateOptions struct {
-	DryRun bool
-	Config Config
+	DryRun                  bool
+	Config                  Config
+	HomebrewMetadataUpdated *bool
 }
 
 type TaskResult struct {
@@ -173,7 +174,7 @@ func updateHomebrewMetadataOnce(ctx context.Context, r Runner, updated *bool) er
 	if *updated {
 		return nil
 	}
-	out := r.Run(ctx, "brew", "update")
+	out := runHomebrewUpdate(ctx, r)
 	if out.Err != nil {
 		return commandError(out)
 	}
@@ -230,6 +231,71 @@ func commandError(out CommandOutput) error {
 	return out.Err
 }
 
+var homebrewUpdateLockRetryDelay = 2 * time.Second
+var homebrewUpdateLockMaxRetries = 5
+
+func updateHomebrewMetadataForTask(ctx context.Context, r Runner, opts UpdateOptions) CommandOutput {
+	if opts.HomebrewMetadataUpdated != nil && *opts.HomebrewMetadataUpdated {
+		return CommandOutput{}
+	}
+	out := runHomebrewUpdate(ctx, r)
+	if out.Err == nil && opts.HomebrewMetadataUpdated != nil {
+		*opts.HomebrewMetadataUpdated = true
+	}
+	return out
+}
+
+func runHomebrewUpdate(ctx context.Context, r Runner) CommandOutput {
+	var out CommandOutput
+	for attempt := 0; ; attempt++ {
+		out = r.Run(ctx, "brew", "update")
+		if out.Err == nil || !isHomebrewUpdateLockError(out) || attempt >= homebrewUpdateLockMaxRetries {
+			break
+		}
+		if !waitForHomebrewUpdateLockRetry(ctx) {
+			break
+		}
+	}
+	return withHomebrewUpdateLockHint(out)
+}
+
+func waitForHomebrewUpdateLockRetry(ctx context.Context) bool {
+	if homebrewUpdateLockRetryDelay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(homebrewUpdateLockRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func isHomebrewUpdateLockError(out CommandOutput) bool {
+	text := strings.ToLower(out.Combined())
+	return strings.Contains(text, "already locked") ||
+		strings.Contains(text, "another `brew update` process is already running") ||
+		strings.Contains(text, "another brew update process is already running")
+}
+
+func withHomebrewUpdateLockHint(out CommandOutput) CommandOutput {
+	if out.Err == nil || !isHomebrewUpdateLockError(out) {
+		return out
+	}
+	hint := "Homebrew is already updating; wait for the other brew update to finish, then rerun bm update."
+	if strings.Contains(out.Combined(), hint) {
+		return out
+	}
+	if strings.TrimSpace(out.Stderr) == "" {
+		out.Stderr = hint
+	} else {
+		out.Stderr = strings.TrimRight(out.Stderr, "\n") + "\n" + hint + "\n"
+	}
+	return out
+}
+
 func requireCommand(r Runner, taskName, command, hint string) (TaskResult, bool) {
 	if _, err := r.LookPath(command); err != nil {
 		return TaskResult{
@@ -244,7 +310,7 @@ func runBrewFormulae(ctx context.Context, r Runner, opts UpdateOptions) TaskResu
 		return res
 	}
 	if !opts.DryRun {
-		update := r.Run(ctx, "brew", "update")
+		update := updateHomebrewMetadataForTask(ctx, r, opts)
 		if update.Err != nil {
 			return failed(update)
 		}
@@ -273,7 +339,7 @@ func runBrewCasks(ctx context.Context, r Runner, opts UpdateOptions) TaskResult 
 		return res
 	}
 	if !opts.DryRun {
-		update := r.Run(ctx, "brew", "update")
+		update := updateHomebrewMetadataForTask(ctx, r, opts)
 		if update.Err != nil {
 			return failed(update)
 		}
