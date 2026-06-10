@@ -207,6 +207,59 @@ func (e *runnerError) Error() string {
 	return e.msg
 }
 
+func TestNvimLuaErrorRequiresSentinel(t *testing.T) {
+	if err := nvimLuaError(CommandOutput{Stdout: "MASON_DONE\n"}, "mason update", "MASON_DONE"); err != nil {
+		t.Fatalf("sentinel present should pass, got %v", err)
+	}
+	if err := nvimLuaError(CommandOutput{Stdout: "LAZY_MISSING\n"}, "lazy.nvim sync", "LAZY_DONE", "LAZY_MISSING"); err != nil {
+		t.Fatalf("alternate marker should pass, got %v", err)
+	}
+	err := nvimLuaError(CommandOutput{Stderr: "E5108: Error executing lua: boom\n"}, "mason update", "MASON_DONE")
+	if err == nil {
+		t.Fatal("missing sentinel must fail even with exit code 0")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error should carry the nvim output, got %v", err)
+	}
+	if err := nvimLuaError(CommandOutput{Err: errNotFound}, "mason update", "MASON_DONE"); err == nil {
+		t.Fatal("non-zero exit must fail")
+	}
+}
+
+type nvimStubRunner struct {
+	output CommandOutput
+}
+
+func (r *nvimStubRunner) LookPath(file string) (string, error) {
+	if file == "nvim" {
+		return "/bin/nvim", nil
+	}
+	return "", errNotFound
+}
+
+func (r *nvimStubRunner) Run(_ context.Context, name string, _ ...string) CommandOutput {
+	if name == "nvim" {
+		return r.output
+	}
+	return CommandOutput{Err: errNotFound}
+}
+
+func TestRemovePackagesMasonFailsWithoutSentinel(t *testing.T) {
+	refs := []PackageRef{{Task: "mason", Name: "lua-language-server"}}
+
+	failedRun := &nvimStubRunner{output: CommandOutput{Stderr: "E5108: Error executing lua: lua-language-server: not found\n"}}
+	results := RemovePackages(context.Background(), failedRun, refs, false)
+	if results[0].Err == nil {
+		t.Fatal("mason removal without sentinel must report an error")
+	}
+
+	okRun := &nvimStubRunner{output: CommandOutput{Stdout: "MASON_REMOVED:lua-language-server\nMASON_DONE\n"}}
+	results = RemovePackages(context.Background(), okRun, refs, false)
+	if results[0].Err != nil {
+		t.Fatalf("successful mason removal reported error: %v", results[0].Err)
+	}
+}
+
 func TestRunBrewFormulaeUpdatesMetadataBeforeOutdated(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true},

@@ -202,7 +202,16 @@ func removePackageGroup(ctx context.Context, r Runner, task string, names []stri
 			return "", err
 		}
 		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonRemoveLua(names), "+qa")
-		return packageCommandResult(out)
+		output, err := packageCommandResult(out)
+		if err != nil {
+			return output, err
+		}
+		// nvim exits 0 even when the Lua chunk errors, so require the
+		// completion sentinel before reporting the removal as successful.
+		if err := nvimLuaError(out, "mason uninstall", "MASON_DONE"); err != nil {
+			return output, err
+		}
+		return output, nil
 	case "npm":
 		if err := requirePackageCommand(r, "npm"); err != nil {
 			return "", err
@@ -314,6 +323,7 @@ a.run_blocking(function()
     error(table.concat(failed, '; '))
   end
 end)
+vim.api.nvim_out_write('MASON_DONE\n')
 `
 	lua = masonLocateLua() + lua
 	lua = strings.ReplaceAll(lua, "__BLOOM_NAMES__", luaStringArray(names))

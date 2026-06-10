@@ -212,8 +212,11 @@ func checkNPMUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, e
 
 func checkMasonUpdates(ctx context.Context, r Runner, cfg TaskConfig) ([]string, error) {
 	out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonCheckLua(cfg.Include, cfg.Exclude), "+qa")
-	if out.Err != nil {
-		return nil, commandError(out)
+	if strings.Contains(out.Combined(), "MASON_MISSING") {
+		return nil, nil
+	}
+	if err := nvimLuaError(out, "mason check", "MASON_DONE"); err != nil {
+		return nil, err
 	}
 	var names []string
 	for _, line := range nonEmptyLines(out.Combined()) {
@@ -499,15 +502,15 @@ func runNeovim(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 
 	if hasLazy && shouldRunPackageSet(lazyNames, taskCfg) {
 		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+lazyLua(lazyNames, hasPackageFilter(taskCfg)), "+qa")
-		if out.Err != nil {
-			return TaskResult{Err: out.Err, Output: out.Combined()}
+		if err := nvimLuaError(out, "lazy.nvim sync", "LAZY_DONE", "LAZY_MISSING"); err != nil {
+			return TaskResult{Err: err, Output: out.Combined()}
 		}
 	}
 	if hasPack && shouldRunPackageSet(packNames, taskCfg) {
 		// vim.pack.update({names}, {force=true}) applies updates without the interactive confirmation buffer.
 		out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+vimPackLua(packNames, hasPackageFilter(taskCfg)), "+qa")
-		if out.Err != nil {
-			return TaskResult{Err: out.Err, Output: out.Combined()}
+		if err := nvimLuaError(out, "vim.pack update", "VIM_PACK_DONE", "VIM_PACK_MISSING"); err != nil {
+			return TaskResult{Err: err, Output: out.Combined()}
 		}
 	}
 
@@ -542,8 +545,11 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return TaskResult{Status: StatusDryRun, Message: "mason registry"}
 	}
 	out := r.Run(ctx, "nvim", "--headless", "-i", "NONE", "+lua "+masonLua(opts.Config.Tasks["mason"].Include, opts.Config.Tasks["mason"].Exclude), "+qa")
-	if out.Err != nil {
-		return failed(out)
+	if strings.Contains(out.Combined(), "MASON_MISSING") {
+		return TaskResult{Status: StatusSkipped}
+	}
+	if err := nvimLuaError(out, "mason update", "MASON_DONE"); err != nil {
+		return TaskResult{Err: err, Output: out.Combined()}
 	}
 	var summary []string
 	var diagnostics []string
@@ -564,6 +570,27 @@ func runMason(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 
 func failed(out CommandOutput) TaskResult {
 	return TaskResult{Err: out.Err, Output: out.Combined()}
+}
+
+// nvimLuaError reports whether a headless nvim Lua chunk ran to completion.
+// nvim --headless exits 0 even when the +lua chunk raises a Lua error, so
+// completion is detected by an explicit sentinel marker that each chunk
+// writes only after it finished successfully (or determined it has nothing
+// to do).
+func nvimLuaError(out CommandOutput, what string, markers ...string) error {
+	if out.Err != nil {
+		return commandError(out)
+	}
+	combined := out.Combined()
+	for _, marker := range markers {
+		if strings.Contains(combined, marker) {
+			return nil
+		}
+	}
+	if text := strings.TrimSpace(combined); text != "" {
+		return fmt.Errorf("%s did not complete: %s", what, text)
+	}
+	return fmt.Errorf("%s did not complete", what)
 }
 
 func nonEmptyLines(text string) []string {
@@ -847,6 +874,7 @@ if __BLOOM_PLUGINS__ ~= nil then
   opts.plugins = __BLOOM_PLUGINS__
 end
 lazy.sync(opts)
+vim.api.nvim_out_write('LAZY_DONE\n')
 `, "__BLOOM_PLUGINS__", plugins)
 }
 
@@ -862,6 +890,7 @@ if not vim.pack then
 end
 
 vim.pack.update(__BLOOM_PLUGINS__, { force = true })
+vim.api.nvim_out_write('VIM_PACK_DONE\n')
 `, "__BLOOM_PLUGINS__", plugins)
 }
 
@@ -1105,6 +1134,7 @@ a.run_blocking(function()
     vim.api.nvim_out_write(('MASON_UPDATED:%s\n'):format(pkg.name))
   end
 end)
+vim.api.nvim_out_write('MASON_DONE\n')
 `
 	lua = masonLocateLua() + lua
 	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
@@ -1229,6 +1259,7 @@ a.run_blocking(function()
       #skipped, table.concat(skipped, ', ')))
   end
 end)
+vim.api.nvim_out_write('MASON_DONE\n')
 `
 	lua = masonLocateLua() + lua
 	lua = strings.ReplaceAll(lua, "__BLOOM_INCLUDE__", luaStringArray(include))
