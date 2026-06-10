@@ -691,6 +691,78 @@ func TestFindRelatedPathsKeepsTokenMatchesOnBoundaries(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsSkipsShortAppNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Go.app")
+	unrelated := []string{
+		filepath.Join(home, "Library", "Application Support", "go"),
+		filepath.Join(home, "Library", "Caches", "go-build"),
+		filepath.Join(home, "Library", "Logs", "go.log.d"),
+	}
+	for _, path := range unrelated {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owned := filepath.Join(home, "Library", "Application Support", "com.example.go")
+	if err := os.MkdirAll(owned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Go", BundleID: "com.example.go"})
+	for _, path := range unrelated {
+		if containsString(paths, path) {
+			t.Fatalf("short-name token matched unrelated path %q: %#v", path, paths)
+		}
+	}
+	if !containsString(paths, owned) {
+		t.Fatalf("bundle-id match missing %q: %#v", owned, paths)
+	}
+}
+
+func TestFindRelatedPathsProtectsVSCodeDataFromNameCollisions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Code.app")
+	vscodeData := filepath.Join(home, "Library", "Application Support", "Code")
+	if err := os.MkdirAll(vscodeData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Code", BundleID: "com.example.code"})
+	if containsString(paths, vscodeData) {
+		t.Fatalf("name collision claimed VS Code data: %#v", paths)
+	}
+
+	vsPaths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+	if !containsString(vsPaths, vscodeData) {
+		t.Fatalf("real VS Code uninstall missing its data dir: %#v", vsPaths)
+	}
+}
+
+func TestFindRelatedPathsNameMatchesSkipProtectedData(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Drop Tool.app")
+	protected := filepath.Join(home, "Library", "Application Support", "drop tool dropbox helper")
+	if err := os.MkdirAll(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	owned := filepath.Join(home, "Library", "Application Support", "Drop Tool")
+	if err := os.MkdirAll(owned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Drop Tool", BundleID: "com.example.droptool"})
+	if containsString(paths, protected) {
+		t.Fatalf("fuzzy name match claimed protected data: %#v", paths)
+	}
+	if !containsString(paths, owned) {
+		t.Fatalf("exact name match missing %q: %#v", owned, paths)
+	}
+}
+
 func TestLooksLikeBundleIDRequiresReverseDNSComponents(t *testing.T) {
 	valid := []string{
 		"com.example.app",

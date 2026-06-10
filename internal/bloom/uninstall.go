@@ -504,7 +504,7 @@ func FindRelatedPaths(app AppEntry) []string {
 		return []string{app.Path}
 	}
 
-	tokens := uniqueStrings([]string{app.BundleID, app.Name})
+	nameToken := leftoverNameToken(app)
 	paths := []string{app.Path}
 	add := func(p string) {
 		if p == "" {
@@ -526,11 +526,18 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 
 	for _, root := range libraryRoots {
-		for _, tok := range tokens {
-			if tok == "" {
-				continue
+		if app.BundleID != "" {
+			matchInDir(root, app.BundleID, &paths)
+		}
+		if nameToken == "" || strings.EqualFold(nameToken, app.BundleID) {
+			continue
+		}
+		var nameMatched []string
+		matchInDir(root, nameToken, &nameMatched)
+		for _, p := range nameMatched {
+			if nameTokenLeftoverAllowed(p, app) {
+				paths = append(paths, p)
 			}
-			matchInDir(root, tok, &paths)
 		}
 	}
 	matchGroupContainers(app, &paths)
@@ -642,14 +649,61 @@ func pathReferenceBoundaryAfter(s string, idx int) bool {
 	return r == '/' || unicode.IsSpace(r) || strings.ContainsRune("\"'<):;", r)
 }
 
+// leftoverNameToken returns the app display name for fuzzy leftover matching
+// in shared ~/Library roots, or "" when the name is too short to identify the
+// app's data without hitting unrelated entries.
+func leftoverNameToken(app AppEntry) string {
+	name := strings.TrimSpace(app.Name)
+	if utf8.RuneCountInString(name) < 3 {
+		return ""
+	}
+	return name
+}
+
+// nameTokenLeftoverAllowed guards fuzzy display-name matches against trashing
+// data that belongs to a different app or to protected user data. Bundle-ID
+// matches are precise and do not pass through this check.
+func nameTokenLeftoverAllowed(path string, app AppEntry) bool {
+	if isVSCodeDataDir(path) && !isVSCodeStableApp(app) && !isVSCodeInsidersApp(app) {
+		return false
+	}
+	if strings.EqualFold(filepath.Base(path), strings.TrimSpace(app.Name)) {
+		return true
+	}
+	return !shouldProtectCleanPath(path)
+}
+
+// isVSCodeDataDir reports whether path is one of Visual Studio Code's known
+// Application Support directories, whose names collide with generic app
+// names like "Code".
+func isVSCodeDataDir(path string) bool {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return false
+	}
+	if filepath.Dir(filepath.Clean(path)) != filepath.Join(home, "Library", "Application Support") {
+		return false
+	}
+	base := filepath.Base(path)
+	return strings.EqualFold(base, "Code") || strings.EqualFold(base, "Code - Insiders")
+}
+
+func isVSCodeStableApp(app AppEntry) bool {
+	return bundleIDEqual(app.BundleID, "com.microsoft.VSCode") || strings.EqualFold(app.Name, "Visual Studio Code")
+}
+
+func isVSCodeInsidersApp(app AppEntry) bool {
+	return bundleIDEqual(app.BundleID, "com.microsoft.VSCodeInsiders") || strings.EqualFold(app.Name, "Visual Studio Code - Insiders")
+}
+
 func matchVSCodePaths(app AppEntry, out *[]string) {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		return
 	}
 
-	stable := bundleIDEqual(app.BundleID, "com.microsoft.VSCode") || strings.EqualFold(app.Name, "Visual Studio Code")
-	insiders := bundleIDEqual(app.BundleID, "com.microsoft.VSCodeInsiders") || strings.EqualFold(app.Name, "Visual Studio Code - Insiders")
+	stable := isVSCodeStableApp(app)
+	insiders := isVSCodeInsidersApp(app)
 	if !stable && !insiders {
 		return
 	}
