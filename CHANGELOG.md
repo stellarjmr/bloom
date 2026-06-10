@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.20 - 2026-06-10
+
 ### Changed
 
 - Build release `bm-core` binaries with CGO disabled so release artifacts stay pure-Go across macOS SDK changes.
