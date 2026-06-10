@@ -57,14 +57,12 @@ func DefaultConfigPath() string {
 func LoadConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
 	if path == "" {
-		applyEnvironmentConfig(&cfg)
 		return cfg, nil
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			applyEnvironmentConfig(&cfg)
 			return cfg, nil
 		}
 		return cfg, err
@@ -125,10 +123,13 @@ func LoadConfig(path string) (Config, error) {
 	if err := scanner.Err(); err != nil {
 		return cfg, err
 	}
-	applyEnvironmentConfig(&cfg)
 	return cfg, nil
 }
 
+// applyEnvironmentConfig applies environment overrides such as NO_COLOR.
+// It must be applied at use time (rendering), never during LoadConfig:
+// load-modify-save flows would otherwise persist the temporary override
+// into the user's config file.
 func applyEnvironmentConfig(cfg *Config) {
 	if os.Getenv("NO_COLOR") != "" {
 		cfg.Color = false

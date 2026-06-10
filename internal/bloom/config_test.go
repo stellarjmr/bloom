@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -51,15 +52,8 @@ exclude = ["legacy"]
 	}
 }
 
-func TestLoadConfigHonorsNoColorEnvironment(t *testing.T) {
+func TestNoColorEnvironmentAppliesAtRenderTimeOnly(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	cfg, err := LoadConfig("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Color {
-		t.Fatal("NO_COLOR did not disable default color output")
-	}
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	content := `
@@ -69,12 +63,32 @@ color = true
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = LoadConfig(path)
+	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Color {
-		t.Fatal("NO_COLOR did not override config color=true")
+	if !cfg.Color {
+		t.Fatal("LoadConfig must not bake the NO_COLOR override into the config")
+	}
+
+	// Load-modify-save flows must not persist the env override to disk.
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), "color = true") {
+		t.Fatalf("NO_COLOR was persisted into the config file:\n%s", saved)
+	}
+
+	// Rendering must honor NO_COLOR.
+	var buf strings.Builder
+	progress := NewProgress(&buf, cfg)
+	progress.Render(1, 1, TaskResult{Name: "brew", Status: StatusOK})
+	if strings.Contains(buf.String(), "\033[") {
+		t.Fatalf("progress output contains ANSI styling despite NO_COLOR: %q", buf.String())
 	}
 }
 

@@ -26,6 +26,7 @@ type Progress struct {
 }
 
 func NewProgress(out io.Writer, cfg Config) *Progress {
+	applyEnvironmentConfig(&cfg)
 	return &Progress{out: out, cfg: cfg, terminal: isTerminal(out)}
 }
 
