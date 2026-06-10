@@ -152,11 +152,17 @@ read_key() {
 }
 
 drain_pending_input() {
+  # Must never return non-zero: callers invoke this as a bare statement under
+  # `set -e`, and a failing return here would abort the script inside the
+  # alternate screen without restoring the terminal.
   local drained=0
   while IFS= read -r -s -n 1 -t 0.01 _ 2>/dev/null; do
     drained=$((drained + 1))
-    [[ $drained -gt 100 ]] && break
+    if [[ $drained -gt 100 ]]; then
+      break
+    fi
   done
+  return 0
 }
 
 show_brand_banner() {
