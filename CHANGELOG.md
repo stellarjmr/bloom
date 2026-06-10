@@ -17,6 +17,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 ### Fixed
 
 - Stop `bm uninstall` leftover matching from claiming unrelated app data: very short app names no longer fuzzy-match shared `~/Library` entries, non-exact name matches respect Bloom's protected-data lists, and Visual Studio Code data dirs are reserved for the real VS Code apps.
+- Require the Homebrew cask fallback detection to verify cask artifacts before running `brew uninstall --zap`, so a same-named cask can no longer permanently delete data for a manually installed app.
 - Keep interactive menus alive when buffered key input is drained under newer bash versions, instead of aborting and leaving the terminal stuck in the alternate screen.
 - Restore the terminal alternate screen and cursor on every exit path of interactive menus, including unexpected script aborts and hangups.
 - Avoid running duplicate `brew update` commands during one `bm update` and retry briefly when Homebrew's update lock is busy.

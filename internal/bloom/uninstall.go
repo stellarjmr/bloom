@@ -1683,8 +1683,10 @@ func matchesBundleUnderCask(caskDir, bundle string) bool {
 }
 
 // caskTokenByBrewQuery is the slowest fallback: list all installed casks,
-// match by lowercased app name, then verify with brew info that the app
-// path is actually owned by that cask.
+// match by lowercased app name, then verify with brew info that the cask
+// actually owns this app bundle. A bare name match is not enough: the token
+// feeds `brew uninstall --cask --zap`, which deletes data permanently, so an
+// unverified token must never be returned.
 func caskTokenByBrewQuery(ctx context.Context, runner Runner, app AppEntry) string {
 	out := runner.Run(ctx, "brew", "list", "--cask")
 	if out.Err != nil {
@@ -1700,11 +1702,15 @@ func caskTokenByBrewQuery(ctx context.Context, runner Runner, app AppEntry) stri
 			continue
 		}
 		info := runner.Run(ctx, "brew", "info", "--cask", token)
-		if info.Err == nil && strings.Contains(info.Stdout, app.Path) {
+		if info.Err != nil {
+			return ""
+		}
+		// brew info lists artifacts by bundle name ("Foo.app (App)") and may
+		// mention the full path in auxiliary artifact lines.
+		if strings.Contains(info.Stdout, app.Path) || strings.Contains(info.Stdout, filepath.Base(app.Path)) {
 			return token
 		}
-		// Even without explicit path mention, exact-name match counts.
-		return token
+		return ""
 	}
 	return ""
 }

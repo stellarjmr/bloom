@@ -1583,6 +1583,38 @@ func (r *brewCaskUninstallRunner) Run(_ context.Context, name string, args ...st
 	}
 }
 
+type caskQueryRunner struct {
+	infoStdout string
+}
+
+func (r *caskQueryRunner) LookPath(string) (string, error) { return "/bin/brew", nil }
+
+func (r *caskQueryRunner) Run(_ context.Context, name string, args ...string) CommandOutput {
+	call := strings.Join(append([]string{name}, args...), " ")
+	switch call {
+	case "brew list --cask":
+		return CommandOutput{Stdout: "foo\n"}
+	case "brew info --cask foo":
+		return CommandOutput{Stdout: r.infoStdout}
+	default:
+		return CommandOutput{Err: errNotFound}
+	}
+}
+
+func TestCaskTokenByBrewQueryRequiresArtifactMatch(t *testing.T) {
+	app := AppEntry{Name: "Foo", Path: "/Applications/Foo.app"}
+
+	owned := &caskQueryRunner{infoStdout: "==> Artifacts\nFoo.app (App)\n"}
+	if got := caskTokenByBrewQuery(context.Background(), owned, app); got != "foo" {
+		t.Fatalf("expected verified token, got %q", got)
+	}
+
+	unrelated := &caskQueryRunner{infoStdout: "==> Artifacts\nSomething Else.app (App)\n"}
+	if got := caskTokenByBrewQuery(context.Background(), unrelated, app); got != "" {
+		t.Fatalf("unverified name match must not return a zap token, got %q", got)
+	}
+}
+
 func TestPrintUninstallSummaryCanHideFilesAfterConfirmation(t *testing.T) {
 	summary := BatchSummary{
 		Results: []UninstallResult{{
