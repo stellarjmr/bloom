@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.21 - 2026-06-27
+
 ### Changed
 
 - Extend `bm uninstall` leftover scanning to embedded helper bundles: XPC services, app extensions (`.appex`), and login-item `.app` helpers inside an app now contribute their own bundle IDs, so per-helper `~/Library` data (Application Support, Caches, Preferences, LaunchAgents, and similar) is cleaned too. Matching uses exact embedded bundle IDs only and skips protected IDs (Apple system, password managers, security/network tooling), keeping removal scoped to the app's own data.
