@@ -76,7 +76,7 @@ The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview t
 
 ## Uninstall
 
-`bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies).
+`bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies). It also scans the app for embedded helper bundles (XPC services, app extensions, and login-item helpers) and cleans their leftovers by exact bundle ID, while skipping protected identifiers so removal stays scoped to the app's own data.
 
 The interactive flow lives at menu item 3:
 

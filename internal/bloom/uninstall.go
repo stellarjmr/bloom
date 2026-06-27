@@ -513,19 +513,7 @@ func FindRelatedPaths(app AppEntry) []string {
 		paths = append(paths, p)
 	}
 
-	libraryRoots := []string{
-		filepath.Join(home, "Library", "Application Support"),
-		filepath.Join(home, "Library", "Caches"),
-		filepath.Join(home, "Library", "HTTPStorages"),
-		filepath.Join(home, "Library", "Containers"),
-		filepath.Join(home, "Library", "Group Containers"),
-		filepath.Join(home, "Library", "WebKit"),
-		filepath.Join(home, "Library", "Logs"),
-		filepath.Join(home, "Library", "Saved Application State"),
-		filepath.Join(home, "Library", "Application Scripts"),
-	}
-
-	for _, root := range libraryRoots {
+	for _, root := range userLibraryLeftoverRoots(home) {
 		if app.BundleID != "" {
 			matchInDir(root, app.BundleID, &paths)
 		}
@@ -544,6 +532,15 @@ func FindRelatedPaths(app AppEntry) []string {
 	matchDiagnosticReports(app, &paths)
 	matchCrashReporterPlists(app, &paths)
 	matchVSCodePaths(app, &paths)
+
+	// Embedded helper bundles (XPC services, app extensions, and login-item
+	// .app helpers) frequently carry their own bundle id and write their own
+	// ~/Library data, which a primary-bundle-id match would miss. Match those
+	// leftovers by exact embedded bundle id only, so cleanup stays scoped to
+	// the app's own helper data.
+	for _, embeddedID := range discoverEmbeddedBundleIDs(app.Path, app.BundleID) {
+		matchBundleIDLeftovers(home, embeddedID, &paths)
+	}
 
 	// Preferences: <bundleID>.plist + ByHost variants
 	prefDir := filepath.Join(home, "Library", "Preferences")
@@ -1191,6 +1188,111 @@ func removeLoginItem(ctx context.Context, runner Runner, app AppEntry) {
 		end try
 	end tell`, name)
 	_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
+}
+
+// userLibraryLeftoverRoots lists the standard per-user ~/Library directories
+// that app uninstall scanning checks for leftover data.
+func userLibraryLeftoverRoots(home string) []string {
+	return []string{
+		filepath.Join(home, "Library", "Application Support"),
+		filepath.Join(home, "Library", "Caches"),
+		filepath.Join(home, "Library", "HTTPStorages"),
+		filepath.Join(home, "Library", "Containers"),
+		filepath.Join(home, "Library", "Group Containers"),
+		filepath.Join(home, "Library", "WebKit"),
+		filepath.Join(home, "Library", "Logs"),
+		filepath.Join(home, "Library", "Saved Application State"),
+		filepath.Join(home, "Library", "Application Scripts"),
+	}
+}
+
+// matchBundleIDLeftovers appends leftover paths that match a single bundle id
+// across the standard user Library roots, preferences, ByHost, LaunchAgents,
+// and cookies. Matching is by exact bundle id only (never by fuzzy app name),
+// so it is safe to run for embedded helper/XPC/extension bundle ids discovered
+// inside an app. Non-existent candidates are dropped later by FindRelatedPaths.
+func matchBundleIDLeftovers(home, bundleID string, out *[]string) {
+	if bundleID == "" {
+		return
+	}
+	for _, root := range userLibraryLeftoverRoots(home) {
+		matchInDir(root, bundleID, out)
+	}
+	prefDir := filepath.Join(home, "Library", "Preferences")
+	*out = append(*out, filepath.Join(prefDir, bundleID+".plist"))
+	matchInDir(filepath.Join(prefDir, "ByHost"), bundleID, out)
+	matchInDir(filepath.Join(home, "Library", "LaunchAgents"), bundleID, out)
+	*out = append(*out, filepath.Join(home, "Library", "Cookies", bundleID+".binarycookies"))
+}
+
+// discoverEmbeddedBundleIDs walks an app bundle's Contents for embedded helper
+// bundles (XPC services, .appex app extensions, and login-item .app helpers)
+// and returns their unique CFBundleIdentifiers. The app's own bundle id and any
+// protected ids (Apple system, password managers, security/network tooling) are
+// excluded so embedded leftover matching never reaches protected data. Only
+// .app helpers nested under Contents/Library/LoginItems are collected; other
+// nested .app bundles may be unrelated products and are skipped.
+func discoverEmbeddedBundleIDs(appPath, primaryBundleID string) []string {
+	if appPath == "" {
+		return nil
+	}
+	contents := filepath.Join(appPath, "Contents")
+	if info, err := os.Stat(contents); err != nil || !info.IsDir() {
+		return nil
+	}
+	loginItems := filepath.Join(appPath, "Contents", "Library", "LoginItems") + string(os.PathSeparator)
+
+	const (
+		maxDepth   = 12
+		maxBundles = 128
+		maxDirs    = 4000
+	)
+	collected := 0
+	visited := 0
+	seen := map[string]bool{}
+	var ids []string
+
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if depth > maxDepth || collected >= maxBundles || visited >= maxDirs {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		visited++
+		for _, entry := range entries {
+			if collected >= maxBundles || visited >= maxDirs {
+				return
+			}
+			if !entry.IsDir() {
+				continue
+			}
+			child := filepath.Join(dir, entry.Name())
+			switch strings.ToLower(filepath.Ext(entry.Name())) {
+			case ".xpc", ".appex":
+				collected++
+				if id := readBundleID(child); id != "" && !bundleIDEqual(id, primaryBundleID) &&
+					!shouldProtectCleanData(id) && !seen[id] {
+					seen[id] = true
+					ids = append(ids, id)
+				}
+			case ".app":
+				if strings.HasPrefix(child, loginItems) {
+					collected++
+					if id := readBundleID(child); id != "" && !bundleIDEqual(id, primaryBundleID) &&
+						!shouldProtectCleanData(id) && !seen[id] {
+						seen[id] = true
+						ids = append(ids, id)
+					}
+				}
+			}
+			walk(child, depth+1)
+		}
+	}
+	walk(contents, 0)
+	return ids
 }
 
 func discoverLoginItemHelperBundleIDs(appPath string) []string {

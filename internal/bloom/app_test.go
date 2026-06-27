@@ -763,6 +763,79 @@ func TestFindRelatedPathsNameMatchesSkipProtectedData(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsIncludesEmbeddedHelperLeftovers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Foo App.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	// Embedded XPC service, app extension, and login-item .app helper, each
+	// carrying its own bundle id in a DIFFERENT domain than the primary app, so
+	// the primary bundle-id/name token match cannot reach these leftovers and
+	// only the embedded-helper scan can.
+	writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "XPCServices", "Updater.xpc"), "com.updater.xpc", "Updater")
+	writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "PlugIns", "Share.appex"), "org.share.ext", "Share")
+	writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "Library", "LoginItems", "Login.app"), "io.login.helper", "Login")
+
+	want := []string{
+		filepath.Join(home, "Library", "Application Support", "com.updater.xpc"),
+		filepath.Join(home, "Library", "Caches", "org.share.ext"),
+		filepath.Join(home, "Library", "Preferences", "io.login.helper.plist"),
+	}
+	for _, path := range want {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("leftover"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo App", BundleID: "com.example.foo"})
+	for _, path := range want {
+		if !containsString(paths, path) {
+			t.Fatalf("paths missing embedded helper leftover %q: %#v", path, paths)
+		}
+	}
+}
+
+func TestFindRelatedPathsSkipsNonLoginItemNestedApps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Foo App.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	// A nested .app outside Contents/Library/LoginItems may be an unrelated
+	// bundled product and must not drag in its leftovers.
+	writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "Resources", "Other.app"), "com.other.bundled", "Other")
+	unrelated := filepath.Join(home, "Library", "Application Support", "com.other.bundled")
+	if err := os.MkdirAll(unrelated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo App", BundleID: "com.example.foo"})
+	if containsString(paths, unrelated) {
+		t.Fatalf("non-login-item nested app leftover claimed: %#v", paths)
+	}
+}
+
+func TestFindRelatedPathsSkipsProtectedEmbeddedBundleIDs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Foo App.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	// An embedded helper whose bundle id is protected (Apple system) must not
+	// be used to reach protected data.
+	writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "XPCServices", "Apple.xpc"), "com.apple.fooHelper", "Apple")
+	protected := filepath.Join(home, "Library", "Caches", "com.apple.fooHelper")
+	if err := os.MkdirAll(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo App", BundleID: "com.example.foo"})
+	if containsString(paths, protected) {
+		t.Fatalf("protected embedded bundle id claimed data: %#v", paths)
+	}
+}
+
 func TestLooksLikeBundleIDRequiresReverseDNSComponents(t *testing.T) {
 	valid := []string{
 		"com.example.app",
