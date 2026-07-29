@@ -107,6 +107,7 @@ enter_menu_screen() {
   return 0
 }
 leave_menu_screen() {
+  printf '\033[0m'
   show_cursor
   if [[ "${MENU_SCREEN_ACTIVE:-false}" == "true" ]]; then
     printf '\033[?1049l'
@@ -459,10 +460,14 @@ check_select_updates() {
   MS_RESULT_VALUES=()
   [[ "$total" -eq 0 ]] && return 1
 
-  local selected=0 top=0 key height width max_visible max_label start end i count mark label dirty=true
+  local selected=0 top=0 key height width max_visible max_label start end i count mark label frame dirty=true
   trap 'leave_menu_screen; exit 130' INT TERM
   reset_draw
   hide_cursor
+  # Keep terminal echo enabled, but conceal characters that arrive between
+  # reads while the next frame is assembled. Rendering the completed frame in
+  # one write prevents echoed j/k input from being interleaved with its rows.
+  printf '\033[8m'
   while true; do
     if [[ "$dirty" == "true" ]]; then
       height="$(terminal_height)"
@@ -485,22 +490,27 @@ check_select_updates() {
         [[ "${MS_SELECTED[i]}" == "true" ]] && count=$((count + 1))
       done
 
-      begin_draw
-      printf '%b%s%b  %b%d/%d selected%b%s\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC" "$CLEAR_EOL"
-      blank_line
-      for ((i = start; i <= end; i++)); do
-        mark="○"
-        [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
-        label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
-        if [[ "$i" -eq "$selected" ]]; then
-          printf '%b> %s %s%b\033[K\n' "$CYAN" "$mark" "$label" "$NC"
-        else
-          printf '  %s %s\033[K\n' "$mark" "$label"
-        fi
-      done
-      blank_line
-      printf '%b↑↓/jk | Space Select | Enter %s | Q Back%b%s\n' "$GRAY" "$action" "$NC" "$CLEAR_EOL"
-      end_draw
+      frame="$({
+        printf '\033[0m'
+        begin_draw
+        printf '%b%s%b  %b%d/%d selected%b%s\n' "$BLUE" "$title" "$NC" "$GRAY" "$count" "$total" "$NC" "$CLEAR_EOL"
+        blank_line
+        for ((i = start; i <= end; i++)); do
+          mark="○"
+          [[ "${MS_SELECTED[i]}" == "true" ]] && mark="●"
+          label="$(fit_label "${MS_LABELS[i]}" "$max_label")"
+          if [[ "$i" -eq "$selected" ]]; then
+            printf '%b> %s %s%b\033[K\n' "$CYAN" "$mark" "$label" "$NC"
+          else
+            printf '  %s %s\033[K\n' "$mark" "$label"
+          fi
+        done
+        blank_line
+        printf '%b↑↓/jk | Space Select | Enter %s | Q Back%b%s\n' "$GRAY" "$action" "$NC" "$CLEAR_EOL"
+        end_draw
+        printf '\033[8m'
+      })"
+      printf '%s' "$frame"
       dirty=false
     fi
 
@@ -527,6 +537,7 @@ check_select_updates() {
       dirty=true
       ;;
     "ENTER")
+      printf '\033[0m'
       show_cursor
       for ((i = 0; i < total; i++)); do
         [[ "${MS_SELECTED[i]}" == "true" ]] && MS_RESULT_VALUES+=("${MS_VALUES[i]}")
@@ -537,6 +548,7 @@ check_select_updates() {
       return 0
       ;;
     "QUIT")
+      printf '\033[0m'
       show_cursor
       return 1
       ;;

@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Fixed
+
+- Prevent repeated `j`/`k` navigation keys from being echoed onto rows in the Check, Remove, and Uninstall package/app selector.
+
 ## v0.6.21 - 2026-06-27
 
 ### Changed
