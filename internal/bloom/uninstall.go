@@ -384,17 +384,26 @@ func readBundleID(appPath string) string {
 }
 
 func readBundleIDWithContext(ctx context.Context, appPath string) string {
-	plist := filepath.Join(appPath, "Contents", "Info.plist")
-	if _, err := os.Stat(plist); err != nil {
-		return ""
+	plists, _ := bundleInfoPlistCandidates(appPath)
+	for _, plist := range plists {
+		if id := readBundleIDFromPlist(ctx, plist); id != "" {
+			return id
+		}
 	}
+	return ""
+}
+
+func readBundleIDFromPlist(ctx context.Context, plist string) string {
 	cmd := exec.CommandContext(ctx, "/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", plist)
 	out, err := cmd.Output()
 	id := ""
 	if err == nil {
 		id = strings.TrimSpace(string(out))
 	} else {
-		id = readXMLPlistString(plist, "CFBundleIdentifier")
+		data, readErr := os.ReadFile(plist)
+		if readErr == nil && validXMLPlistData(data) {
+			id = readXMLPlistStringData(data, "CFBundleIdentifier")
+		}
 	}
 	if id == "(null)" || id == "" {
 		return ""

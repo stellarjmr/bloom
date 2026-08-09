@@ -3,8 +3,11 @@ package bloom
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -239,10 +242,74 @@ func resolvedAppBundlePath(path string) string {
 // XML plists are parsed directly. Binary plists are passed to plutil only when
 // their bytes can contain the requested ASCII identifier.
 func candidateBundleIDMatches(ctx context.Context, appPath, want string) (match, known bool) {
-	plist := filepath.Join(appPath, "Contents", "Info.plist")
+	plists, complete := bundleInfoPlistCandidates(appPath)
+	if len(plists) == 0 {
+		return false, complete
+	}
+	unknown := !complete
+	for _, plist := range plists {
+		matches, plistKnown := plistBundleIDMatches(ctx, plist, want)
+		if matches {
+			return true, true
+		}
+		if !plistKnown {
+			unknown = true
+		}
+	}
+	return false, !unknown
+}
+
+func bundleInfoPlistCandidates(appPath string) ([]string, bool) {
+	const maxWrappedBundles = 32
+	complete := true
+	seen := map[string]bool{}
+	paths := []string{}
+	addIfPresent := func(path string) {
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			complete = false
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+
+	addIfPresent(filepath.Join(appPath, "Contents", "Info.plist"))
+	addIfPresent(filepath.Join(appPath, "WrappedBundle", "Info.plist"))
+	wrapper := filepath.Join(appPath, "Wrapper")
+	entries, err := os.ReadDir(wrapper)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			complete = false
+		}
+		return paths, complete
+	}
+	wrapped := 0
+	for _, entry := range entries {
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".app") {
+			continue
+		}
+		wrapped++
+		if wrapped > maxWrappedBundles {
+			complete = false
+			break
+		}
+		addIfPresent(filepath.Join(wrapper, entry.Name(), "Info.plist"))
+	}
+	return paths, complete
+}
+
+func plistBundleIDMatches(ctx context.Context, plist, want string) (match, known bool) {
 	info, err := os.Stat(plist)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, true
+		return false, false
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > uninstallSiblingInfoPlistLimit {
 		return false, false
@@ -251,24 +318,56 @@ func candidateBundleIDMatches(ctx context.Context, appPath, want string) (match,
 	if err != nil {
 		return false, false
 	}
-	if id := readXMLPlistStringData(data, "CFBundleIdentifier"); id != "" {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.HasPrefix(trimmed, []byte("<?xml")) || bytes.HasPrefix(trimmed, []byte("<plist")) {
+		if !validXMLPlistData(data) {
+			return false, false
+		}
+		id := readXMLPlistStringData(data, "CFBundleIdentifier")
+		if id == "" || !looksLikeBundleID(id) {
+			return false, true
+		}
 		return bundleIDEqual(id, want), true
 	}
 	if !bytes.HasPrefix(data, []byte("bplist")) {
-		// A malformed or identifier-less plist does not describe a valid
-		// sibling bundle and therefore cannot share the requested identity.
-		return false, true
+		id := readBundleIDFromPlist(ctx, plist)
+		if id != "" {
+			return bundleIDEqual(id, want), true
+		}
+		return false, plistLintSucceeds(ctx, plist)
 	}
 	lowerData := bytes.ToLower(data)
 	if !bytes.Contains(lowerData, []byte(strings.ToLower(want))) &&
 		!bytes.Contains(lowerData, utf16BEASCII(strings.ToLower(want))) {
 		return false, true
 	}
-	id := readBundleIDWithContext(ctx, appPath)
+	id := readBundleIDFromPlist(ctx, plist)
 	if id == "" {
 		return false, false
 	}
 	return bundleIDEqual(id, want), true
+}
+
+func validXMLPlistData(data []byte) bool {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	sawPlist := false
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return sawPlist
+		}
+		if err != nil {
+			return false
+		}
+		if start, ok := token.(xml.StartElement); ok && start.Name.Local == "plist" {
+			sawPlist = true
+		}
+	}
+}
+
+func plistLintSucceeds(ctx context.Context, plist string) bool {
+	cmd := exec.CommandContext(ctx, "/usr/bin/plutil", "-lint", plist)
+	return cmd.Run() == nil && ctx.Err() == nil
 }
 
 func readXMLPlistStringData(data []byte, key string) string {

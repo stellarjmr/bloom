@@ -42,6 +42,89 @@ func TestScanUninstallBundleSiblingsMatchesBundleIDCaseInsensitively(t *testing.
 	}
 }
 
+func TestScanUninstallBundleSiblingsReadsWrappedIOSBundle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	useUninstallSiblingRoots(t, "~/Applications")
+
+	selected := filepath.Join(home, "Applications", "Foo.app")
+	sibling := filepath.Join(home, "Applications", "Foo iOS.app")
+	wrapped := filepath.Join(sibling, "Wrapper", "Foo.app")
+	writeTestInfoPlist(t, selected, "com.example.foo", "foo")
+	if err := os.MkdirAll(wrapped, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrappedPlist := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.foo</string></dict></plist>`
+	if err := os.WriteFile(filepath.Join(wrapped, "Info.plist"), []byte(wrappedPlist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readBundleID(sibling); got != "com.example.foo" {
+		t.Fatalf("wrapped bundle ID = %q, want com.example.foo", got)
+	}
+	scan := scanUninstallBundleSiblings(context.Background(), AppEntry{
+		Path:     selected,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	})
+	if !scan.Complete || len(scan.Paths) != 1 || scan.Paths[0] != sibling {
+		t.Fatalf("wrapped sibling scan = %#v, want complete match for %q", scan, sibling)
+	}
+}
+
+func TestScanUninstallBundleSiblingsFailsClosedOnCorruptPlist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	useUninstallSiblingRoots(t, "~/Applications")
+
+	selected := filepath.Join(home, "Applications", "Foo.app")
+	unknown := filepath.Join(home, "Applications", "Unknown.app", "Contents", "Info.plist")
+	writeTestInfoPlist(t, selected, "com.example.foo", "foo")
+	if err := os.MkdirAll(filepath.Dir(unknown), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unknown, []byte("<?xml version=\"1.0\"?><plist><dict>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scan := scanUninstallBundleSiblings(context.Background(), AppEntry{
+		Path:     selected,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	})
+	if scan.Complete {
+		t.Fatal("corrupt candidate plist should make the sibling scan incomplete")
+	}
+}
+
+func TestScanUninstallBundleSiblingsAcceptsValidPlistWithoutBundleID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	useUninstallSiblingRoots(t, "~/Applications")
+
+	selected := filepath.Join(home, "Applications", "Foo.app")
+	identifierless := filepath.Join(home, "Applications", "Vendor Uninstaller.app", "Contents", "Info.plist")
+	writeTestInfoPlist(t, selected, "com.example.foo", "foo")
+	if err := os.MkdirAll(filepath.Dir(identifierless), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleName</key><string>Vendor Uninstaller</string></dict></plist>`
+	if err := os.WriteFile(identifierless, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scan := scanUninstallBundleSiblings(context.Background(), AppEntry{
+		Path:     selected,
+		Name:     "Foo",
+		BundleID: "com.example.foo",
+	})
+	if !scan.Complete || len(scan.Paths) != 0 {
+		t.Fatalf("identifier-less valid bundle should be a known non-match: %#v", scan)
+	}
+}
+
 func TestScanUninstallBundleSiblingsReportsIncompleteRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
