@@ -8,6 +8,39 @@ import (
 	"testing"
 )
 
+type cleanProbeRunner struct {
+	processTables []string
+	psCalls       int
+	lsofAvailable bool
+	lsofOutput    CommandOutput
+}
+
+func (r *cleanProbeRunner) LookPath(file string) (string, error) {
+	if file == "ps" || file == "lsof" && r.lsofAvailable {
+		return "/usr/bin/" + file, nil
+	}
+	return "", os.ErrNotExist
+}
+
+func (r *cleanProbeRunner) Run(_ context.Context, name string, _ ...string) CommandOutput {
+	switch name {
+	case "ps":
+		index := r.psCalls
+		r.psCalls++
+		if len(r.processTables) == 0 {
+			return CommandOutput{Stdout: "/sbin/launchd\n"}
+		}
+		if index >= len(r.processTables) {
+			index = len(r.processTables) - 1
+		}
+		return CommandOutput{Stdout: r.processTables[index]}
+	case "lsof":
+		return r.lsofOutput
+	default:
+		return CommandOutput{Err: os.ErrInvalid}
+	}
+}
+
 func TestValidateCleanPathSafetyBoundaries(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -364,11 +397,214 @@ func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Clean.Whitelist = nil
-	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	runner := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
 	for _, path := range files {
 		if !cleanResultCovers(res, path) {
 			t.Fatalf("dry-run targets missing Mole-compatible cache %q: targets=%#v skipped=%#v", path, res.Targets, res.Skipped)
 		}
+	}
+}
+
+func TestCleanCacheOwnerProcessMatchingRequiresCorroboration(t *testing.T) {
+	table := strings.Join([]string{
+		"/Applications/Claude.app/Contents/Frameworks/Squirrel.framework/Resources/ShipIt com.anthropic.claudefordesktop.ShipIt",
+		"/System/Library/PrivateFrameworks/DataAccess.framework/Support/dataaccessd",
+		"/usr/libexec/syncdefaultsd",
+	}, "\n")
+
+	if cleanProcessTableMatchesOwner(table, "com.microsoft.VSCode.ShipIt") {
+		t.Fatal("a different vendor's ShipIt process claimed the VS Code cache")
+	}
+	if cleanProcessTableMatchesOwner(table, "com.plausiblelabs.crashreporter.data") {
+		t.Fatal("an embedded data substring claimed an unrelated cache")
+	}
+	if !cleanProcessTableMatchesOwner(table, "com.anthropic.claudefordesktop.ShipIt") {
+		t.Fatal("the corroborated Claude ShipIt process was not detected")
+	}
+	if !cleanProcessTableMatchesOwner(
+		"/Applications/Autodesk Fusion.app/Contents/MacOS/AcCoreConsole",
+		"com.autodesk.AcCoreConsole",
+	) {
+		t.Fatal("the corroborated Autodesk helper was not detected")
+	}
+}
+
+func TestCleanNamedCacheOwnerDoesNotUseGenericCamelCaseWords(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "Library", "Caches", "GeoServices", "map.cache")
+	programs := cleanNamedCacheOwnerPrograms(path)
+	if cleanProcessTableMentionsAny("/usr/libexec/example-services-helper", programs) {
+		t.Fatalf("generic services process matched GeoServices via %#v", programs)
+	}
+}
+
+func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	tests := []struct {
+		path    string
+		command string
+		family  string
+	}{
+		{
+			path:    filepath.Join(home, ".cargo", "registry", "cache", "crate.crate"),
+			command: "/usr/local/bin/cargo build",
+			family:  "Rust",
+		},
+		{
+			path:    filepath.Join(home, ".gradle", "caches", "modules-2"),
+			command: "org.gradle.launcher.daemon.bootstrap.GradleDaemon",
+			family:  "Gradle",
+		},
+		{
+			path:    filepath.Join(home, "Library", "pnpm", "store", "v10"),
+			command: "/usr/local/bin/node /opt/pnpm/dist/pnpm.cjs install",
+			family:  "pnpm/Corepack",
+		},
+		{
+			path:    filepath.Join(home, "Library", "Caches", "node", "corepack", "v1"),
+			command: "/usr/local/bin/node /opt/corepack/dist/corepack.cjs pnpm",
+			family:  "pnpm/Corepack",
+		},
+		{
+			path:    filepath.Join(home, "Library", "Developer", "Xcode", "DerivedData", "Project"),
+			command: "/usr/bin/xcodebuild -scheme Project",
+			family:  "Xcode",
+		},
+	}
+
+	for _, test := range tests {
+		family, programs := cleanProcessGuardForPath(test.path)
+		if family != test.family {
+			t.Errorf("guard family for %q = %q, want %q", test.path, family, test.family)
+			continue
+		}
+		if !cleanProcessTableMentionsAny(test.command, programs) {
+			t.Errorf("guard %q did not match command %q via %#v", family, test.command, programs)
+		}
+	}
+
+	_, pnpmPrograms := cleanProcessGuardForPath(filepath.Join(home, "Library", "pnpm", "store", "v10"))
+	if cleanProcessTableMentionsAny("cat /tmp/pnpm-lock.yaml", pnpmPrograms) {
+		t.Fatal("a pnpm lockfile mention was mistaken for a running pnpm command")
+	}
+}
+
+func TestRunCleanSkipsLiveReverseDNSCacheOwner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cache := filepath.Join(home, "Library", "Caches", "com.autodesk.AcCoreConsole")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "cache.bin"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{processTables: []string{
+		"/Applications/Autodesk Fusion.app/Contents/MacOS/AcCoreConsole\n",
+	}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	if cleanResultContains(res, cache) {
+		t.Fatalf("live cache appeared in targets: %#v", res.Targets)
+	}
+	if !cleanResultSkippedFor(res, cache, "cache owner is running") {
+		t.Fatalf("live cache skip missing: %#v", res.Skipped)
+	}
+}
+
+func TestRunCleanSkipsLiveSQLiteCacheInDryRunAndRealRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	cache := filepath.Join(home, "Library", "Caches", "SQLiteApp")
+	db := filepath.Join(cache, "Cache.db")
+	for _, path := range []string{db, db + "-wal", db + "-shm"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	for _, dryRun := range []bool{true, false} {
+		res := RunClean(context.Background(), CleanOptions{DryRun: dryRun, Config: cfg, Runner: runner})
+		if cleanResultContains(res, cache) {
+			t.Fatalf("live SQLite cache appeared in targets (dry-run=%v): %#v", dryRun, res.Targets)
+		}
+		if !cleanResultSkippedFor(res, cache, "live SQLite cache") {
+			t.Fatalf("live SQLite skip missing (dry-run=%v): %#v", dryRun, res.Skipped)
+		}
+		if _, err := os.Stat(db); err != nil {
+			t.Fatalf("live SQLite database was touched (dry-run=%v): %v", dryRun, err)
+		}
+	}
+}
+
+func TestRunCleanSkipsSQLiteCacheWithOpenHandle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cache := filepath.Join(home, "Library", "Caches", "DatabaseApp")
+	db := filepath.Join(cache, "Cache.db")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(db, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+		lsofOutput:    CommandOutput{Stdout: "p123\nn" + db + "\n"},
+	}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	if cleanResultContains(res, cache) {
+		t.Fatalf("open SQLite cache appeared in targets: %#v", res.Targets)
+	}
+	if !cleanResultSkippedFor(res, cache, "live SQLite cache") {
+		t.Fatalf("open SQLite skip missing: %#v", res.Skipped)
+	}
+}
+
+func TestRunCleanRechecksActivityAtTrashBoundary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	cache := filepath.Join(home, "Library", "Caches", "com.vendor.Widget")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "cache.bin"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{processTables: []string{
+		"/sbin/launchd\n",
+		"/sbin/launchd\n",
+		"/Applications/Widget.app/Contents/MacOS/Widget com.vendor.Widget\n",
+	}}
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if runner.psCalls < 3 {
+		t.Fatalf("process table calls = %d, want an action-boundary refresh", runner.psCalls)
+	}
+	if !cleanResultSkippedFor(res, cache, "cache owner is running") {
+		t.Fatalf("boundary skip missing: %#v", res.Skipped)
+	}
+	if _, err := os.Stat(cache); err != nil {
+		t.Fatalf("cache was moved after its owner started: %v", err)
 	}
 }
 
@@ -458,6 +694,16 @@ func cleanResultCovers(res CleanResult, path string) bool {
 	for _, target := range res.Targets {
 		targetPath := filepath.Clean(target.Path)
 		if targetPath == path || strings.HasPrefix(path, targetPath+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanResultSkippedFor(res CleanResult, path, reason string) bool {
+	path = filepath.Clean(path)
+	for _, skipped := range res.Skipped {
+		if filepath.Clean(skipped.Path) == path && skipped.Reason == reason {
 			return true
 		}
 	}

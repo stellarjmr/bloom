@@ -65,6 +65,13 @@ type cleanRule struct {
 	Pattern string
 }
 
+type cleanActivityProbe struct {
+	runner       Runner
+	processTable string
+	processKnown bool
+	loaded       bool
+}
+
 func DefaultCleanWhitelist() []string {
 	return []string{
 		"~/Library/Caches/ms-playwright*",
@@ -319,7 +326,9 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		runner = OSRunner{}
 	}
 
+	activity := &cleanActivityProbe{runner: runner}
 	candidates := discoverCleanCandidates(whitelist)
+	pending := make([]CleanTarget, 0, len(candidates))
 	for _, target := range candidates {
 		if ctx.Err() != nil {
 			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: ctx.Err().Error()})
@@ -346,27 +355,452 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "open incomplete download"})
 			continue
 		}
+		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
+			continue
+		}
 
 		sizeKB := pathSizeKB(target.Path)
 		target.SizeKB = sizeKB
+		// Sizing can be slow enough for an owner to start or open a database.
+		// Refresh before even promising the target in a dry-run result.
+		activity.refresh(ctx)
+		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
+			continue
+		}
 		if opts.DryRun {
 			res.Targets = append(res.Targets, target)
 			res.TotalKB += sizeKB
 			logCleanOperation("trash", cleanLogSize(sizeKB), "dry-run", target.Path)
 			continue
 		}
+		pending = append(pending, target)
+	}
 
+	if opts.DryRun || len(pending) == 0 {
+		return res
+	}
+
+	for _, target := range pending {
+		if ctx.Err() != nil {
+			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: ctx.Err().Error()})
+			break
+		}
+		// This is the action boundary. Refresh per target because earlier Trash
+		// moves may take long enough for a later cache owner to start.
+		activity.refresh(ctx)
+		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
+			continue
+		}
 		if err := moveCleanPathToTrash(ctx, runner, target.Path); err != nil {
 			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: err.Error()})
-			logCleanOperation("trash", cleanLogSize(sizeKB), "error", target.Path)
+			logCleanOperation("trash", cleanLogSize(target.SizeKB), "error", target.Path)
 			continue
 		}
 		res.Targets = append(res.Targets, target)
-		res.TotalKB += sizeKB
-		logCleanOperation("trash", cleanLogSize(sizeKB), "ok", target.Path)
+		res.TotalKB += target.SizeKB
+		logCleanOperation("trash", cleanLogSize(target.SizeKB), "ok", target.Path)
 	}
 
 	return res
+}
+
+func (p *cleanActivityProbe) refresh(ctx context.Context) {
+	p.loaded = true
+	p.processTable, p.processKnown = cleanProcessTable(ctx, p.runner)
+}
+
+func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string {
+	if !p.loaded {
+		p.refresh(ctx)
+	}
+	if reason := cleanSQLiteActivityReason(ctx, p.runner, path); reason != "" {
+		return reason
+	}
+	if family, programs := cleanProcessGuardForPath(path); family != "" {
+		if !p.processKnown {
+			return family + " process state unknown"
+		}
+		if cleanProcessTableMentionsAny(p.processTable, programs) {
+			return family + " is running"
+		}
+	}
+	if owner := cleanReverseDNSCacheOwner(path); owner != "" {
+		if !p.processKnown {
+			return "cache owner state unknown"
+		}
+		if cleanProcessTableMatchesOwner(p.processTable, owner) {
+			return "cache owner is running"
+		}
+	}
+	if programs := cleanNamedCacheOwnerPrograms(path); len(programs) > 0 {
+		if !p.processKnown {
+			return "cache owner state unknown"
+		}
+		if cleanProcessTableMentionsAny(p.processTable, programs) {
+			return "cache owner is running"
+		}
+	}
+	return ""
+}
+
+func cleanProcessTable(ctx context.Context, runner Runner) (string, bool) {
+	if _, err := runner.LookPath("ps"); err != nil {
+		return "", false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out := runner.Run(probeCtx, "ps", "-axo", "command=")
+	if out.Err != nil || probeCtx.Err() != nil || strings.TrimSpace(out.Stdout) == "" {
+		return "", false
+	}
+	return out.Stdout, true
+}
+
+func cleanReverseDNSCacheOwner(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	root := filepath.Join(home, "Library", "Caches")
+	rel, ok := cleanRelUnder(path, root)
+	if !ok || rel == "." {
+		return ""
+	}
+	owner := strings.SplitN(rel, string(os.PathSeparator), 2)[0]
+	if !looksLikeBundleID(owner) {
+		return ""
+	}
+	return owner
+}
+
+func cleanNamedCacheOwnerPrograms(path string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	var component string
+	for _, root := range []string{
+		filepath.Join(home, "Library", "Caches"),
+		filepath.Join(home, "Library", "Logs"),
+		filepath.Join(home, "Library", "Saved Application State"),
+	} {
+		rel, ok := cleanRelUnder(path, root)
+		if !ok || rel == "." {
+			continue
+		}
+		component = strings.SplitN(rel, string(os.PathSeparator), 2)[0]
+		break
+	}
+	component = strings.TrimSuffix(component, ".savedState")
+	if component == "" || looksLikeBundleID(component) {
+		return nil
+	}
+
+	// A single CamelCase word is not sufficient evidence that the cache owner
+	// is running. For example, treating GeoServices as both "geo" and
+	// "services" makes unrelated system service commands protect the cache.
+	// Match the complete component and add only a few explicit aliases for
+	// vendor directories whose process names are intentionally different.
+	compact := cleanCompactOwnerName(component)
+	aliases := map[string][]string{
+		"bravesoftware": {"brave"},
+		"firefox":       {"firefox"},
+		"google":        {"google", "chrome"},
+		"homebrew":      {"brew"},
+		"zed":           {"zed"},
+	}
+	programs := append([]string{}, aliases[compact]...)
+	if len(compact) >= 3 && !containsString(programs, compact) {
+		programs = append(programs, compact)
+	}
+	return programs
+}
+
+func cleanCompactOwnerName(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func cleanProcessTableMatchesOwner(table, owner string) bool {
+	ownerLower := strings.ToLower(owner)
+	parts := strings.Split(ownerLower, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	leaf := parts[len(parts)-1]
+	for _, line := range strings.Split(table, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, ownerLower) {
+			return true
+		}
+		if !cleanTextContainsToken(lower, leaf) {
+			continue
+		}
+		for _, component := range parts[1 : len(parts)-1] {
+			if len(component) >= 4 && cleanTextContainsToken(lower, component) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cleanProcessTableMentionsAny(table string, programs []string) bool {
+	for _, line := range strings.Split(table, "\n") {
+		lower := strings.ToLower(line)
+		for _, program := range programs {
+			if cleanCommandMentionsProgram(lower, strings.ToLower(program)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cleanCommandMentionsProgram(command, program string) bool {
+	if program == "" {
+		return false
+	}
+	for start := 0; start < len(command); {
+		idx := strings.Index(command[start:], program)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(program)
+		beforeOK := idx == 0 || !cleanProgramNameByte(command[idx-1])
+		afterOK := end == len(command) || !cleanProgramNameByte(command[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = idx + 1
+	}
+	return false
+}
+
+func cleanTextContainsToken(text, token string) bool {
+	if token == "" {
+		return false
+	}
+	for start := 0; start < len(text); {
+		idx := strings.Index(text[start:], token)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(token)
+		beforeOK := idx == 0 || !cleanAlphaNumByte(text[idx-1])
+		afterOK := end == len(text) || !cleanAlphaNumByte(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = idx + 1
+	}
+	return false
+}
+
+func cleanProgramNameByte(ch byte) bool {
+	return ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-'
+}
+
+func cleanAlphaNumByte(ch byte) bool {
+	return ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9'
+}
+
+func cleanProcessGuardForPath(path string) (string, []string) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", nil
+	}
+	guards := []struct {
+		family   string
+		roots    []string
+		programs []string
+	}{
+		{
+			family: "Rust",
+			roots: []string{
+				filepath.Join(home, ".cargo", "registry"),
+				filepath.Join(home, ".cargo", "git"),
+			},
+			programs: []string{"cargo", "rustc", "rustdoc", "clippy-driver", "cargo-nextest"},
+		},
+		{
+			family: "Gradle",
+			roots: []string{
+				filepath.Join(home, ".gradle", "caches"),
+				filepath.Join(home, ".gradle", "daemon"),
+				filepath.Join(home, ".gradle", "workers"),
+			},
+			programs: []string{"gradle", "gradledaemon"},
+		},
+		{
+			family: "pnpm/Corepack",
+			roots: []string{
+				filepath.Join(home, "Library", "pnpm", "store"),
+				filepath.Join(home, "Library", "Caches", "node", "corepack"),
+			},
+			programs: []string{"pnpm", "corepack", "yarn"},
+		},
+		{
+			family: "Xcode",
+			roots: []string{
+				filepath.Join(home, "Library", "Developer", "Xcode"),
+				filepath.Join(home, "Library", "Caches", "com.apple.dt.Xcode"),
+			},
+			programs: []string{"xcode", "xcodebuild", "sourcekitservice"},
+		},
+	}
+	for _, guard := range guards {
+		for _, root := range guard.roots {
+			if cleanPathAtOrBelow(path, root) {
+				return guard.family, guard.programs
+			}
+		}
+	}
+	return "", nil
+}
+
+func cleanPathAtOrBelow(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
+}
+
+func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) string {
+	families, live, uncertain := cleanSQLiteFamilies(path)
+	if live {
+		return "live SQLite cache"
+	}
+	if uncertain {
+		return "SQLite state unknown"
+	}
+	if len(families) == 0 {
+		return ""
+	}
+	if _, err := runner.LookPath("lsof"); err != nil {
+		return "SQLite open-file state unknown"
+	}
+	args := []string{"-Fn", "--"}
+	for _, base := range families {
+		for _, candidate := range []string{base, base + "-wal", base + "-shm", base + "-journal"} {
+			if _, err := os.Lstat(candidate); err == nil {
+				args = append(args, candidate)
+			}
+		}
+	}
+	if len(args) == 2 {
+		return ""
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out := runner.Run(probeCtx, "lsof", args...)
+	if probeCtx.Err() != nil {
+		return "SQLite open-file check timed out"
+	}
+	if out.Err == nil {
+		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {
+			return "live SQLite cache"
+		}
+		return ""
+	}
+	if isLsofNoOpenFiles(out) {
+		return ""
+	}
+	return "SQLite open-file state unknown"
+}
+
+func cleanSQLiteFamilies(path string) (families []string, live, uncertain bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, false, !errors.Is(err, os.ErrNotExist)
+	}
+	if !info.IsDir() {
+		base, ok := cleanSQLiteBasePath(path)
+		if !ok {
+			return nil, false, false
+		}
+		_, err := os.Lstat(base + "-shm")
+		return []string{base}, err == nil, err != nil && !errors.Is(err, os.ErrNotExist)
+	}
+
+	rootDepth := pathDepth(path)
+	visited := 0
+	seen := map[string]bool{}
+	walkErr := filepath.WalkDir(path, func(candidate string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			uncertain = true
+			return nil
+		}
+		visited++
+		if visited > 2048 {
+			uncertain = true
+			return filepath.SkipAll
+		}
+		if entry.IsDir() && candidate != path && pathDepth(candidate)-rootDepth >= 4 {
+			return filepath.SkipDir
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if cleanIsSQLiteSharedMemoryPath(candidate) {
+			live = true
+			return filepath.SkipAll
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if base, ok := cleanSQLiteBasePath(candidate); ok && !seen[base] {
+			seen[base] = true
+			families = append(families, base)
+			if len(families) > 256 {
+				uncertain = true
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		uncertain = true
+	}
+	return families, live, uncertain && !live
+}
+
+func cleanSQLiteBasePath(path string) (string, bool) {
+	base := path
+	lower := strings.ToLower(base)
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if strings.HasSuffix(lower, suffix) {
+			base = base[:len(base)-len(suffix)]
+			lower = lower[:len(lower)-len(suffix)]
+			break
+		}
+	}
+	for _, suffix := range []string{".db", ".sqlite", ".sqlite3"} {
+		if strings.HasSuffix(lower, suffix) {
+			return base, true
+		}
+	}
+	return "", false
+}
+
+func cleanIsSQLiteSharedMemoryPath(path string) bool {
+	if !strings.HasSuffix(strings.ToLower(path), "-shm") {
+		return false
+	}
+	_, ok := cleanSQLiteBasePath(path)
+	return ok
 }
 
 func discoverCleanCandidates(whitelist []string) []CleanTarget {
