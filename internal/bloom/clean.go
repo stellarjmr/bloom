@@ -44,6 +44,9 @@ type CleanTarget struct {
 	Path   string
 	Label  string
 	SizeKB int64
+	// identity binds discovery to the final Trash boundary so replacing a
+	// cache entry during a slow size/process probe cannot redirect the move.
+	identity string
 }
 
 type CleanSkip struct {
@@ -136,6 +139,8 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Go build cache", Pattern: "~/Library/Caches/go-build/*", Category: "compiler_cache"},
 		{Label: "Go module cache", Pattern: "~/go/pkg/mod/*", Category: "compiler_cache"},
 		{Label: "Rust Cargo registry cache", Pattern: "~/.cargo/registry/cache/*", Category: "compiler_cache"},
+		{Label: "Rust Cargo extracted sources", Pattern: "~/.cargo/registry/src/*", Category: "compiler_cache"},
+		{Label: "Rust Cargo git cache", Pattern: "~/.cargo/git/*", Category: "compiler_cache"},
 		{Label: "Rust documentation cache", Pattern: "~/.rustup/toolchains/*/share/doc/*", Category: "compiler_cache"},
 		{Label: "Rustup toolchain downloads", Pattern: "~/.rustup/downloads/*", Category: "compiler_cache"},
 		{Label: "ccache compiler cache", Pattern: "~/.ccache/*", Category: "compiler_cache"},
@@ -374,6 +379,10 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
+		if !cleanTargetIdentityMatches(target) {
+			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "path changed during clean"})
+			continue
+		}
 		if opts.DryRun {
 			res.Targets = append(res.Targets, target)
 			res.TotalKB += sizeKB
@@ -399,7 +408,11 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
-		if err := moveCleanPathToTrash(ctx, runner, target.Path); err != nil {
+		if !cleanTargetIdentityMatches(target) {
+			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "path changed during clean"})
+			continue
+		}
+		if err := moveCleanPathToTrash(ctx, runner, target.Path, target.identity); err != nil {
 			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: err.Error()})
 			logCleanOperation("trash", cleanLogSize(target.SizeKB), "error", target.Path)
 			continue
@@ -420,6 +433,9 @@ func (p *cleanActivityProbe) refresh(ctx context.Context) {
 func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string {
 	if !p.loaded {
 		p.refresh(ctx)
+	}
+	if reason := cleanToolCacheContainmentReason(path); reason != "" {
+		return reason
 	}
 	if reason := cleanSQLiteActivityReason(ctx, p.runner, path); reason != "" {
 		return reason
@@ -625,6 +641,7 @@ func cleanProcessGuardForPath(path string) (string, []string) {
 	if err != nil || home == "" {
 		return "", nil
 	}
+	cargoHome, _ := rustCleanHomes()
 	guards := []struct {
 		family   string
 		roots    []string
@@ -633,8 +650,8 @@ func cleanProcessGuardForPath(path string) (string, []string) {
 		{
 			family: "Rust",
 			roots: []string{
-				filepath.Join(home, ".cargo", "registry"),
-				filepath.Join(home, ".cargo", "git"),
+				filepath.Join(cargoHome, "registry"),
+				filepath.Join(cargoHome, "git"),
 			},
 			programs: []string{"cargo", "rustc", "rustdoc", "clippy-driver", "cargo-nextest"},
 		},
@@ -860,7 +877,6 @@ func defaultCleanRules() []cleanRule {
 		{Label: "Yarn v1 cache", Pattern: "~/Library/Caches/Yarn/*"},
 		{Label: "Bun cache", Pattern: "~/.bun/install/cache/*"},
 		{Label: "Corepack cache", Pattern: "~/Library/Caches/node/corepack/*"},
-		{Label: "Cargo git cache", Pattern: "~/.cargo/git/*"},
 		{Label: "Poetry cache", Pattern: "~/.cache/poetry/*"},
 		{Label: "Node-gyp cache", Pattern: "~/.node-gyp/*"},
 		{Label: "TypeScript cache", Pattern: "~/.cache/typescript/*"},
@@ -871,16 +887,128 @@ func defaultCleanRules() []cleanRule {
 		{Label: "Oh My Zsh cache", Pattern: "~/.oh-my-zsh/cache/*"},
 	}
 	seen := map[string]bool{}
+	for _, rule := range rules {
+		seen[expandedCleanPattern(rule.Pattern)] = true
+	}
+	for _, rule := range rustCleanRules() {
+		key := expandedCleanPattern(rule.Pattern)
+		if !seen[key] {
+			rules = append(rules, rule)
+			seen[key] = true
+		}
+	}
 	for _, item := range CleanWhitelistItems() {
 		if item.Pattern == cleanFinderMetadataSentinel || isTrashWhitelistPattern(item.Pattern) {
 			continue
 		}
-		if !seen[item.Pattern] {
+		if isDefaultRustCleanPattern(item.Pattern) {
+			continue
+		}
+		key := expandedCleanPattern(item.Pattern)
+		if !seen[key] {
 			rules = append(rules, cleanRule{Label: item.Label, Pattern: item.Pattern})
-			seen[item.Pattern] = true
+			seen[key] = true
 		}
 	}
 	return rules
+}
+
+func rustCleanRules() []cleanRule {
+	cargoHome, rustupHome := rustCleanHomes()
+	return []cleanRule{
+		{Label: "Rust Cargo registry cache", Pattern: filepath.Join(cargoHome, "registry", "cache", "*")},
+		{Label: "Rust Cargo extracted sources", Pattern: filepath.Join(cargoHome, "registry", "src", "*")},
+		{Label: "Cargo git cache", Pattern: filepath.Join(cargoHome, "git", "*")},
+		{Label: "Rust documentation cache", Pattern: filepath.Join(rustupHome, "toolchains", "*", "share", "doc", "*")},
+		{Label: "Rustup toolchain downloads", Pattern: filepath.Join(rustupHome, "downloads", "*")},
+	}
+}
+
+func rustCleanHomes() (cargoHome, rustupHome string) {
+	home, _ := os.UserHomeDir()
+	return resolvedCleanToolHome(os.Getenv("CARGO_HOME"), filepath.Join(home, ".cargo")),
+		resolvedCleanToolHome(os.Getenv("RUSTUP_HOME"), filepath.Join(home, ".rustup"))
+}
+
+func isDefaultRustCleanPattern(pattern string) bool {
+	switch pattern {
+	case "~/.cargo/registry/cache/*",
+		"~/.cargo/registry/src/*",
+		"~/.cargo/git/*",
+		"~/.rustup/toolchains/*/share/doc/*",
+		"~/.rustup/downloads/*":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolvedCleanToolHome(value, fallback string) string {
+	fallback = filepath.Clean(fallback)
+	if value == "" || !filepath.IsAbs(value) || hasControlChar(value) || hasDotDotComponent(value) || hasGlobMeta(value) {
+		return fallback
+	}
+	cleaned := filepath.Clean(value)
+	if cleaned == string(os.PathSeparator) || isTrashCleanPath(cleaned) || isBlockedSystemCleanPath(cleaned) {
+		return fallback
+	}
+	return cleaned
+}
+
+func cleanToolCacheContainmentReason(path string) string {
+	toolHome, cacheRoot, ok := cleanRustToolCacheScope(path)
+	if !ok {
+		return ""
+	}
+	physicalHome, err := filepath.EvalSymlinks(toolHome)
+	if err != nil || physicalHome == "" || filepath.Clean(physicalHome) == string(os.PathSeparator) {
+		return "Rust cache path state unknown"
+	}
+	physicalRoot, err := filepath.EvalSymlinks(cacheRoot)
+	if err != nil || physicalRoot == "" {
+		return "Rust cache path state unknown"
+	}
+	physicalPath, err := filepath.EvalSymlinks(path)
+	if err != nil || physicalPath == "" {
+		return "Rust cache path state unknown"
+	}
+	physicalHome = filepath.Clean(physicalHome)
+	physicalRoot = filepath.Clean(physicalRoot)
+	physicalPath = filepath.Clean(physicalPath)
+	rootRel, rootOK := cleanRelUnder(physicalRoot, physicalHome)
+	_, pathOK := cleanRelUnder(physicalPath, physicalRoot)
+	if !rootOK || rootRel == "." || !pathOK {
+		return "Rust cache path leaves tool home"
+	}
+	return ""
+}
+
+func cleanRustToolCacheScope(path string) (toolHome, cacheRoot string, ok bool) {
+	cargoHome, rustupHome := rustCleanHomes()
+	for _, scope := range []struct {
+		home string
+		root string
+	}{
+		{home: cargoHome, root: filepath.Join(cargoHome, "registry", "cache")},
+		{home: cargoHome, root: filepath.Join(cargoHome, "registry", "src")},
+		{home: cargoHome, root: filepath.Join(cargoHome, "git")},
+		{home: rustupHome, root: filepath.Join(rustupHome, "downloads")},
+	} {
+		if cleanPathAtOrBelow(path, scope.root) {
+			return scope.home, scope.root, true
+		}
+	}
+
+	toolchains := filepath.Join(rustupHome, "toolchains")
+	rel, underToolchains := cleanRelUnder(path, toolchains)
+	if !underToolchains || rel == "." {
+		return "", "", false
+	}
+	parts := strings.Split(rel, string(os.PathSeparator))
+	if len(parts) < 4 || parts[1] != "share" || parts[2] != "doc" {
+		return "", "", false
+	}
+	return rustupHome, filepath.Join(toolchains, parts[0], "share", "doc"), true
 }
 
 func expandCleanRulePattern(pattern string) []string {
@@ -987,6 +1115,7 @@ func normalizeCleanTargets(targets []CleanTarget) []CleanTarget {
 			seenIdentity[identity] = true
 		}
 		target.Path = path
+		target.identity = identity
 		out = append(out, target)
 	}
 	return out
@@ -1001,6 +1130,10 @@ func cleanPathIdentity(path string) string {
 		return fmt.Sprintf("%d:%d", uint64(st.Dev), uint64(st.Ino))
 	}
 	return "path:" + path
+}
+
+func cleanTargetIdentityMatches(target CleanTarget) bool {
+	return target.identity != "" && cleanPathIdentity(target.Path) == target.identity
 }
 
 func findDSStoreTargets() []CleanTarget {
@@ -1090,7 +1223,7 @@ func validateCleanPath(path string) error {
 			return fmt.Errorf("critical system path: %s", candidate)
 		}
 	}
-	if len(variants) > 1 && !isAllowedCleanCanonicalization(variants[0], variants[1]) {
+	if len(variants) > 1 && !isAllowedCleanCanonicalization(variants[0], variants[1]) && !isAllowedRustToolCacheCanonicalization(cleaned) {
 		return fmt.Errorf("refusing redirected clean path: %s -> %s", variants[0], variants[1])
 	}
 	return nil
@@ -1122,7 +1255,7 @@ func validateTrashMovePath(path string) error {
 			return fmt.Errorf("critical system path: %s", candidate)
 		}
 	}
-	if len(variants) > 1 && !isAllowedCleanCanonicalization(variants[0], variants[1]) {
+	if len(variants) > 1 && !isAllowedCleanCanonicalization(variants[0], variants[1]) && !isAllowedRustToolCacheCanonicalization(cleaned) {
 		return fmt.Errorf("refusing redirected trash path: %s -> %s", variants[0], variants[1])
 	}
 	return nil
@@ -1152,6 +1285,13 @@ func isAllowedCleanCanonicalization(raw, resolved string) bool {
 		return true
 	}
 	return sameCleanPathRelativeToSystemCanonicalRoot(raw, resolved)
+}
+
+func isAllowedRustToolCacheCanonicalization(path string) bool {
+	if _, _, ok := cleanRustToolCacheScope(path); !ok {
+		return false
+	}
+	return cleanToolCacheContainmentReason(path) == ""
 }
 
 func sameCleanPathRelativeToHome(raw, resolved string) bool {
@@ -1671,31 +1811,45 @@ func isLsofNoOpenFiles(out CommandOutput) bool {
 	return strings.TrimSpace(out.Stdout) == ""
 }
 
-func moveCleanPathToTrash(ctx context.Context, runner Runner, path string) error {
+func moveCleanPathToTrash(ctx context.Context, runner Runner, path, expectedIdentity string) error {
+	if reason := cleanToolCacheContainmentReason(path); reason != "" {
+		return errors.New(reason)
+	}
 	if err := validateCleanPath(path); err != nil {
 		return err
 	}
-	return movePathToTrash(ctx, runner, path)
+	return movePathToTrashWithIdentity(ctx, runner, path, expectedIdentity)
 }
 
 func movePathToTrash(ctx context.Context, runner Runner, path string) error {
+	return movePathToTrashWithIdentity(ctx, runner, path, "")
+}
+
+func movePathToTrashWithIdentity(ctx context.Context, runner Runner, path, expectedIdentity string) error {
 	if err := validateTrashMovePath(path); err != nil {
 		return err
 	}
 	if testTrash := os.Getenv("BLOOM_TEST_TRASH_DIR"); testTrash != "" {
-		return movePathIntoTrashDir(path, testTrash)
+		return movePathIntoTrashDirChecked(path, testTrash, expectedIdentity)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return errors.New("Trash unavailable")
 	}
-	if err := movePathIntoTrashDir(path, filepath.Join(home, ".Trash")); err != nil {
+	if err := movePathIntoTrashDirChecked(path, filepath.Join(home, ".Trash"), expectedIdentity); err != nil {
 		return fmt.Errorf("Trash unavailable: %w", err)
 	}
 	return nil
 }
 
 func movePathIntoTrashDir(path, trashDir string) error {
+	return movePathIntoTrashDirChecked(path, trashDir, "")
+}
+
+func movePathIntoTrashDirChecked(path, trashDir, expectedIdentity string) error {
+	if expectedIdentity != "" && cleanPathIdentity(path) != expectedIdentity {
+		return errors.New("path changed during clean")
+	}
 	if info, err := os.Lstat(trashDir); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("Trash is a symlink: %s", trashDir)
 	}
@@ -1709,6 +1863,9 @@ func movePathIntoTrashDir(path, trashDir string) error {
 	dest, err := uniqueTrashDestination(trashDir, filepath.Base(path))
 	if err != nil {
 		return err
+	}
+	if expectedIdentity != "" && cleanPathIdentity(path) != expectedIdentity {
+		return errors.New("path changed during clean")
 	}
 	return os.Rename(path, dest)
 }

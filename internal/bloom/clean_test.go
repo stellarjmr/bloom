@@ -11,6 +11,7 @@ import (
 type cleanProbeRunner struct {
 	processTables []string
 	psCalls       int
+	onPS          func(call int)
 	lsofAvailable bool
 	lsofOutput    CommandOutput
 }
@@ -27,6 +28,9 @@ func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string)
 	case "ps":
 		index := r.psCalls
 		r.psCalls++
+		if r.onPS != nil {
+			r.onPS(r.psCalls)
+		}
 		if len(r.processTables) == 0 {
 			return CommandOutput{Stdout: "/sbin/launchd\n"}
 		}
@@ -492,6 +496,203 @@ func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
 	}
 }
 
+func TestResolvedCleanToolHomeRejectsUnsafeEnvironmentValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fallback := filepath.Join(home, ".cargo")
+	valid := filepath.Join(home, ".local", "share", "mise", "cargo")
+	if got := resolvedCleanToolHome(valid, fallback); got != valid {
+		t.Fatalf("valid absolute tool home = %q, want %q", got, valid)
+	}
+
+	for _, value := range []string{
+		"relative/cargo",
+		home + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "outside",
+		filepath.Join(home, "cargo[old]"),
+		filepath.Join(home, "cargo\nold"),
+		string(os.PathSeparator),
+		"/usr/local/cargo",
+		filepath.Join(home, ".Trash", "cargo"),
+	} {
+		if got := resolvedCleanToolHome(value, fallback); got != fallback {
+			t.Errorf("unsafe tool home %q resolved to %q, want fallback %q", value, got, fallback)
+		}
+	}
+}
+
+func TestRunCleanHonorsRelocatedRustHomesAndPreservesInstalledState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cargoHome := filepath.Join(home, ".local", "share", "mise", "cargo")
+	rustupHome := filepath.Join(home, ".local", "share", "mise", "rustup")
+	t.Setenv("CARGO_HOME", cargoHome)
+	t.Setenv("RUSTUP_HOME", rustupHome)
+
+	cleanable := []string{
+		filepath.Join(cargoHome, "registry", "cache", "index-hash", "crate.crate"),
+		filepath.Join(cargoHome, "registry", "src", "index-hash", "crate", "src.rs"),
+		filepath.Join(cargoHome, "git", "checkouts", "repo", "HEAD"),
+		filepath.Join(rustupHome, "downloads", "archive.tar.xz"),
+		filepath.Join(rustupHome, "toolchains", "stable", "share", "doc", "book", "index.html"),
+	}
+	preserved := []string{
+		filepath.Join(cargoHome, "registry", "index", "index-hash", "config.json"),
+		filepath.Join(cargoHome, "bin", "cargo"),
+		filepath.Join(rustupHome, "toolchains", "stable", "bin", "rustc"),
+		filepath.Join(home, ".cargo", "registry", "src", "default", "keep.rs"),
+	}
+	for _, path := range append(append([]string{}, cleanable...), preserved...) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	for _, path := range cleanable {
+		if !cleanResultCovers(res, path) {
+			t.Errorf("relocated Rust cache missing from targets: %q (targets=%#v, skipped=%#v, failed=%#v)", path, res.Targets, res.Skipped, res.Failed)
+		}
+	}
+	for _, path := range preserved {
+		if cleanResultCovers(res, path) {
+			t.Errorf("installed or inactive Rust state appeared in targets: %q (targets=%#v)", path, res.Targets)
+		}
+	}
+}
+
+func TestRunCleanSkipsCargoCachesWhileBuildIsActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cargoHome := filepath.Join(home, "mise", "cargo")
+	rustupHome := filepath.Join(home, "mise", "rustup")
+	t.Setenv("CARGO_HOME", cargoHome)
+	t.Setenv("RUSTUP_HOME", rustupHome)
+	cargoFiles := []string{
+		filepath.Join(cargoHome, "registry", "cache", "index", "crate.crate"),
+		filepath.Join(cargoHome, "registry", "src", "index", "crate", "lib.rs"),
+		filepath.Join(cargoHome, "git", "checkouts", "repo", "HEAD"),
+	}
+	rustupDownload := filepath.Join(rustupHome, "downloads", "toolchain.tar.xz")
+	for _, path := range append(append([]string{}, cargoFiles...), rustupDownload) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{processTables: []string{"/usr/local/bin/cargo build\n"}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	for _, path := range cargoFiles {
+		if cleanResultCovers(res, path) {
+			t.Errorf("active Cargo cache appeared in targets: %q", path)
+		}
+	}
+	if !cleanResultCovers(res, rustupDownload) {
+		t.Fatalf("independent Rustup download cache was hidden: targets=%#v skipped=%#v", res.Targets, res.Skipped)
+	}
+}
+
+func TestRunCleanRejectsCargoCacheRootThatEscapesToolHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	cargoHome := filepath.Join(home, "custom-cargo")
+	t.Setenv("CARGO_HOME", cargoHome)
+	outside := filepath.Join(home, "outside-registry-sources")
+	outsideFile := filepath.Join(outside, "crate", "private.rs")
+	if err := os.MkdirAll(filepath.Dir(outsideFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outsideFile, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cargoHome, "registry"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cargoHome, "registry", "src")); err != nil {
+		t.Skipf("cannot create symlink fixture: %v", err)
+	}
+
+	logicalTarget := filepath.Join(cargoHome, "registry", "src", "crate")
+	if reason := cleanToolCacheContainmentReason(logicalTarget); reason != "Rust cache path leaves tool home" {
+		t.Fatalf("containment reason = %q, want tool-home escape", reason)
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{
+		Config: cfg,
+		Runner: &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}},
+	})
+	if cleanResultContains(res, logicalTarget) {
+		t.Fatalf("escaped Cargo source root appeared in moved targets: %#v", res.Targets)
+	}
+	if _, err := os.Stat(outsideFile); err != nil {
+		t.Fatalf("file outside CARGO_HOME was touched: %v", err)
+	}
+}
+
+func TestRunCleanAllowsContainedCacheBelowSymlinkedCargoHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	physicalHome := filepath.Join(home, "mise", "installs", "rust", "stable", "cargo")
+	logicalHome := filepath.Join(home, "cargo-current")
+	t.Setenv("CARGO_HOME", logicalHome)
+	targetFile := filepath.Join(physicalHome, "registry", "src", "index", "crate", "lib.rs")
+	if err := os.MkdirAll(filepath.Dir(targetFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetFile, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physicalHome, logicalHome); err != nil {
+		t.Skipf("cannot create symlink fixture: %v", err)
+	}
+
+	logicalTarget := filepath.Join(logicalHome, "registry", "src", "index")
+	if reason := cleanToolCacheContainmentReason(logicalTarget); reason != "" {
+		t.Fatalf("contained symlinked tool home was rejected: %s", reason)
+	}
+	if err := validateCleanPath(logicalTarget); err != nil {
+		t.Fatalf("contained symlinked tool home failed validation: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{
+		DryRun: true,
+		Config: cfg,
+		Runner: &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}},
+	})
+	if !cleanResultContains(res, logicalTarget) {
+		t.Fatalf("contained relocated Cargo cache missing: targets=%#v skipped=%#v failed=%#v", res.Targets, res.Skipped, res.Failed)
+	}
+}
+
+func TestCleanWhitelistInventoryIncludesCargoSourceAndGitCaches(t *testing.T) {
+	items := CleanWhitelistItems()
+	for _, want := range []string{"~/.cargo/registry/src/*", "~/.cargo/git/*"} {
+		found := false
+		for _, item := range items {
+			if item.Pattern == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("clean whitelist inventory missing %q", want)
+		}
+	}
+}
+
 func TestRunCleanSkipsLiveReverseDNSCacheOwner(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -605,6 +806,47 @@ func TestRunCleanRechecksActivityAtTrashBoundary(t *testing.T) {
 	}
 	if _, err := os.Stat(cache); err != nil {
 		t.Fatalf("cache was moved after its owner started: %v", err)
+	}
+}
+
+func TestRunCleanRefusesTargetReplacedAtTrashBoundary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	cache := filepath.Join(home, "Library", "Caches", "ReplaceableCache")
+	backup := filepath.Join(home, "original-cache")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "old.bin"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	runner.onPS = func(call int) {
+		if call != 3 {
+			return
+		}
+		if err := os.Rename(cache, backup); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cache, "new.bin"), []byte("new"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if !cleanResultSkippedFor(res, cache, "path changed during clean") {
+		t.Fatalf("replacement skip missing: %#v", res.Skipped)
+	}
+	for _, path := range []string{filepath.Join(cache, "new.bin"), filepath.Join(backup, "old.bin")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("replacement safety fixture was touched: %s: %v", path, err)
+		}
 	}
 }
 
