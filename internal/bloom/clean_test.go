@@ -468,6 +468,11 @@ func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
 			family:  "pnpm/Corepack",
 		},
 		{
+			path:    filepath.Join(home, ".local", "share", "pnpm", "store", "v9"),
+			command: filepath.Join(home, ".local", "share", "mise", "installs", "pnpm", "9.15.9", "pnpm") + " install",
+			family:  "pnpm/Corepack",
+		},
+		{
 			path:    filepath.Join(home, "Library", "Caches", "node", "corepack", "v1"),
 			command: "/usr/local/bin/node /opt/corepack/dist/corepack.cjs pnpm",
 			family:  "pnpm/Corepack",
@@ -493,6 +498,40 @@ func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
 	_, pnpmPrograms := cleanProcessGuardForPath(filepath.Join(home, "Library", "pnpm", "store", "v10"))
 	if cleanProcessTableMentionsAny("cat /tmp/pnpm-lock.yaml", pnpmPrograms) {
 		t.Fatal("a pnpm lockfile mention was mistaken for a running pnpm command")
+	}
+}
+
+func TestRunCleanMovesMisePnpmStoreGenerationToTrash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	testTrash := filepath.Join(home, "trash-stub")
+	t.Setenv("BLOOM_TEST_TRASH_DIR", testTrash)
+	target := filepath.Join(home, ".local", "share", "pnpm", "store", "v9")
+	cacheFile := filepath.Join(target, "files", "package.bin")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheFile, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{
+		Config: cfg,
+		Runner: &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}},
+	})
+	if len(res.Failed) > 0 {
+		t.Fatalf("pnpm clean failed: %#v", res.Failed)
+	}
+	if !cleanResultContains(res, target) {
+		t.Fatalf("mise/XDG pnpm store missing from clean result: %#v", res.Targets)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("pnpm store generation should have moved to Trash: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(testTrash, "v9", "files", "package.bin")); err != nil {
+		t.Fatalf("pnpm store generation missing from Trash: %v", err)
 	}
 }
 

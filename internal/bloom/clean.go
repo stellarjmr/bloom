@@ -173,6 +173,7 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Homebrew downloaded packages", Pattern: "~/Library/Caches/Homebrew/*", Category: "package_manager"},
 		{Label: "Yarn package manager cache", Pattern: "~/.cache/yarn/*", Category: "package_manager"},
 		{Label: "pnpm package store", Pattern: "~/Library/pnpm/store/*", Category: "package_manager"},
+		{Label: "pnpm package store (mise/XDG)", Pattern: "~/.local/share/pnpm/store/*", Category: "package_manager"},
 		{Label: "Composer PHP dependencies cache (legacy)", Pattern: "~/.composer/cache/*", Category: "package_manager"},
 		{Label: "Composer PHP dependencies cache", Pattern: "~/Library/Caches/composer/*", Category: "package_manager"},
 		{Label: "RubyGems cache", Pattern: "~/.gem/cache/*", Category: "package_manager"},
@@ -670,6 +671,7 @@ func cleanProcessGuardForPath(path string) (string, []string) {
 			family: "pnpm/Corepack",
 			roots: []string{
 				filepath.Join(home, "Library", "pnpm", "store"),
+				filepath.Join(home, ".local", "share", "pnpm", "store"),
 				filepath.Join(home, "Library", "Caches", "node", "corepack"),
 			},
 			programs: []string{"pnpm", "corepack", "yarn"},

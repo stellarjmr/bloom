@@ -20,6 +20,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Protect apps that share a Bundle ID during uninstall: re-scan before side effects, move only the selected non-cask bundle while preserving shared state, and refuse the required Homebrew `--zap` when another copy exists or the scan is incomplete.
 - Find exact extended data names such as `AyuGramDesktop` and `AyuGram Desktop` from a Bundle ID leaf only when it demonstrably extends the app's own display name, avoiding wrapper/fork collisions and broad filename matching.
 - Read iOS/iPadOS `Wrapper/*.app/Info.plist` identities during app discovery and sibling checks, while treating unreadable or malformed candidate metadata as an incomplete safety scan.
+- Clean mise/XDG pnpm store generations under `~/.local/share/pnpm/store` with the same active pnpm/Corepack and redirected-path guards as the standard macOS store, keeping every Bloom removal recoverable in Trash.
 
 ## v0.6.22 - 2026-07-29
 

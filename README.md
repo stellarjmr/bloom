@@ -76,6 +76,8 @@ The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview t
 
 Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets Cargo registry archives/extracted sources, Cargo git caches, Rustup downloads, and documentation caches only; registry indexes, Cargo-installed binaries, and toolchain binaries stay untouched. Active Rust builds and cache roots that escape their selected tool home are skipped.
 
+pnpm cleanup covers store generations under both `~/Library/pnpm/store` and the mise/XDG-style `~/.local/share/pnpm/store`. Bloom moves each generation to Trash and skips both roots while pnpm or Corepack is active; redirected roots still fail path validation.
+
 Codex cleanup is limited to exact abandoned staging locations: Sparkle update entries and marketplace directories with the `openai-bundled.staging-`, `marketplace-upgrade-`, or `marketplace-add-` prefixes. Bloom keeps newer pending desktop updates, completed marketplaces, backups, sessions, credentials, and configuration. Unknown versions fall back to a 30-day age gate, and any active Codex/Sparkle process, open staging file, path redirection, or changed identity stops the Trash move.
 
 ## Uninstall
