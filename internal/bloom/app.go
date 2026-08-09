@@ -907,6 +907,14 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 			}
 			fmt.Fprintf(a.Out, "   %s: %s\n", verb, command)
 		}
+		if res.SharedBundleSibling {
+			fmt.Fprintln(a.Out, "   kept shared app data because another installed copy uses the same bundle ID")
+			for _, path := range res.SiblingPaths {
+				fmt.Fprintf(a.Out, "   sibling: %s\n", path)
+			}
+		} else if res.SharedBundleUncertain {
+			fmt.Fprintln(a.Out, "   kept shared app data because the installed-copy scan could not be completed")
+		}
 		if showFiles {
 			fileMark := "✓"
 			if dryRun {

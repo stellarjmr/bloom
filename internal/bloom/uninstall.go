@@ -37,16 +37,19 @@ type AppEntry struct {
 
 // UninstallResult captures the outcome for a single app removal.
 type UninstallResult struct {
-	App          AppEntry
-	RemovedKB    int64
-	Files        []string
-	Moved        []UninstallMovedPath
-	Failed       []string
-	Err          error
-	BrewCask     string
-	BrewRemoved  bool
-	AppRemoved   bool
-	StillRunning bool
+	App                   AppEntry
+	RemovedKB             int64
+	Files                 []string
+	Moved                 []UninstallMovedPath
+	Failed                []string
+	Err                   error
+	BrewCask              string
+	BrewRemoved           bool
+	AppRemoved            bool
+	StillRunning          bool
+	SharedBundleSibling   bool
+	SharedBundleUncertain bool
+	SiblingPaths          []string
 }
 
 type UninstallMovedPath struct {
@@ -375,11 +378,17 @@ func symlinkTargetPath(path string) string {
 }
 
 func readBundleID(appPath string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return readBundleIDWithContext(ctx, appPath)
+}
+
+func readBundleIDWithContext(ctx context.Context, appPath string) string {
 	plist := filepath.Join(appPath, "Contents", "Info.plist")
 	if _, err := os.Stat(plist); err != nil {
 		return ""
 	}
-	cmd := exec.Command("/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", plist)
+	cmd := exec.CommandContext(ctx, "/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", plist)
 	out, err := cmd.Output()
 	id := ""
 	if err == nil {
@@ -993,13 +1002,46 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		res.Err = errors.New("missing app path")
 		return res
 	}
+	selectedIdentity := cleanPathIdentity(app.Path)
+	if selectedIdentity == "" {
+		res.Err = fmt.Errorf("app bundle not found: %s", app.Path)
+		return res
+	}
+	boundBundleID := readBundleID(app.Path)
+	if boundBundleID != "" {
+		app.BundleID = boundBundleID
+		res.App = app
+	}
 	if vendor := officialUninstallerVendor(app); vendor != "" {
 		res.Err = fmt.Errorf("requires the official %s uninstaller", vendor)
 		return res
 	}
 
-	paths := FindRelatedPaths(app)
-	loginItemHelpers := discoverLoginItemHelperBundleIDs(app.Path)
+	siblingScan := scanUninstallBundleSiblings(ctx, app)
+	applyUninstallSiblingScan(&res, siblingScan)
+	sharedBundleData := res.SharedBundleSibling || res.SharedBundleUncertain
+
+	cask := detectHomebrewCask(ctx, runner, app)
+	res.BrewCask = cask
+	if cask != "" && sharedBundleData {
+		res.Err = sharedBundleZapRefusal(app, res)
+		return res
+	}
+
+	var paths []string
+	loginItemHelpers := []string(nil)
+	if sharedBundleData {
+		// Bundle-ID data, launch services, login items, and Dock entries may be
+		// shared by the surviving copy. Only the explicitly selected bundle is
+		// safe to move in this mode.
+		paths = nil
+		if !isHomeConfigPath(app.Path) {
+			paths = append(paths, app.Path)
+		}
+	} else {
+		paths = FindRelatedPaths(app)
+		loginItemHelpers = discoverLoginItemHelperBundleIDs(app.Path)
+	}
 	pathSizes := make(map[string]int64, len(paths))
 	appBundlePlanned := false
 	for _, p := range paths {
@@ -1009,16 +1051,37 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		}
 	}
 
-	if !dryRun {
-		res.StillRunning = stopApp(ctx, runner, app)
+	if dryRun && cask != "" {
+		res.BrewRemoved = true
 	}
 
-	cask := detectHomebrewCask(ctx, runner, app)
-	if cask != "" {
-		res.BrewCask = cask
-		if dryRun {
-			res.BrewRemoved = true
-		} else {
+	if !dryRun {
+		if !uninstallAppIdentityMatches(app, selectedIdentity, boundBundleID) {
+			res.Err = errors.New("app bundle changed during uninstall; retry after rescanning")
+			return res
+		}
+		liveSiblingScan := scanUninstallBundleSiblings(ctx, app)
+		if !sharedBundleData && (len(liveSiblingScan.Paths) > 0 || !liveSiblingScan.Complete) {
+			applyUninstallSiblingScan(&res, liveSiblingScan)
+			res.Err = errors.New("installed app copies changed during uninstall; retry to review the safer plan")
+			return res
+		}
+		applyUninstallSiblingScan(&res, liveSiblingScan)
+
+		liveCask := detectHomebrewCask(ctx, runner, app)
+		if liveCask != cask {
+			res.Err = errors.New("Homebrew cask ownership changed during uninstall; retry after rescanning")
+			return res
+		}
+		if cask != "" && (res.SharedBundleSibling || res.SharedBundleUncertain) {
+			res.Err = sharedBundleZapRefusal(app, res)
+			return res
+		}
+
+		if !sharedBundleData {
+			res.StillRunning = stopApp(ctx, runner, app)
+		}
+		if cask != "" {
 			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", "--zap", cask)
 			if out.Err == nil && !brewCaskStillInstalled(ctx, runner, cask) {
 				res.BrewRemoved = true
@@ -1049,7 +1112,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			}
 			return res.AppRemoved
 		}
-		if err := moveAppBundleToTrash(ctx, runner, app.Path); err != nil {
+		if err := moveAppBundleToTrash(ctx, runner, app.Path, selectedIdentity); err != nil {
 			res.Failed = append(res.Failed, app.Path)
 			return false
 		}
@@ -1093,8 +1156,10 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	}
 
 	if !dryRun && res.AppRemoved {
-		removeLoginItem(ctx, runner, app)
-		bootoutLoginItemHelpers(ctx, runner, loginItemHelpers)
+		if !sharedBundleData {
+			removeLoginItem(ctx, runner, app)
+			bootoutLoginItemHelpers(ctx, runner, loginItemHelpers)
+		}
 		unregisterLaunchServices(ctx, runner, app.Path)
 	}
 
@@ -1121,7 +1186,8 @@ func brewCaskZapCommand(cask string) string {
 func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun bool) BatchSummary {
 	var sum BatchSummary
 	anyBrew := false
-	successfulApps := []AppEntry{}
+	removedApps := []AppEntry{}
+	dockCleanupApps := []AppEntry{}
 
 	for _, app := range apps {
 		res := UninstallApp(ctx, runner, app, dryRun)
@@ -1131,7 +1197,10 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		}
 		sum.TotalRemovedKB += res.RemovedKB
 		if res.Err == nil && (dryRun || res.AppRemoved) {
-			successfulApps = append(successfulApps, app)
+			removedApps = append(removedApps, res.App)
+			if !res.SharedBundleSibling && !res.SharedBundleUncertain {
+				dockCleanupApps = append(dockCleanupApps, res.App)
+			}
 		}
 		if res.BrewRemoved {
 			anyBrew = true
@@ -1141,8 +1210,10 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		sum.BrewAutoremove = anyBrew
 		return sum
 	}
-	if len(successfulApps) > 0 {
-		removeAppsFromDock(ctx, runner, successfulApps)
+	if len(dockCleanupApps) > 0 {
+		removeAppsFromDock(ctx, runner, dockCleanupApps)
+	}
+	if len(removedApps) > 0 {
 		refreshLaunchServices(ctx, runner)
 	}
 	if anyBrew {
@@ -1836,18 +1907,18 @@ func isValidCaskToken(token string) bool {
 	return true
 }
 
-func moveAppBundleToTrash(ctx context.Context, runner Runner, appPath string) error {
-	err := movePathToTrashStubborn(ctx, runner, appPath)
+func moveAppBundleToTrash(ctx context.Context, runner Runner, appPath, expectedIdentity string) error {
+	err := movePathToTrashStubbornWithIdentity(ctx, runner, appPath, expectedIdentity)
 	if err == nil {
 		return nil
 	}
 	if os.Getenv("BLOOM_TEST_TRASH_DIR") != "" {
 		return err
 	}
-	return moveAppBundleToTrashWithAdmin(ctx, runner, appPath)
+	return moveAppBundleToTrashWithAdmin(ctx, runner, appPath, expectedIdentity)
 }
 
-func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath string) error {
+func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath, expectedIdentity string) error {
 	if err := validateTrashMovePath(appPath); err != nil {
 		return err
 	}
@@ -1860,6 +1931,9 @@ func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath s
 	info, err := os.Lstat(appPath)
 	if err != nil {
 		return err
+	}
+	if expectedIdentity != "" && cleanPathIdentity(appPath) != expectedIdentity {
+		return errors.New("app bundle changed during uninstall")
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing admin Trash move for symlink app bundle: %s", appPath)
@@ -1896,6 +1970,9 @@ func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath s
 	if err != nil {
 		return err
 	}
+	if expectedIdentity != "" && cleanPathIdentity(appPath) != expectedIdentity {
+		return errors.New("app bundle changed during uninstall")
+	}
 	out := runInteractive(ctx, runner, "/usr/bin/sudo", "/bin/mv", "-n", appPath, dest)
 	if out.Err != nil {
 		return fmt.Errorf("sudo Trash move failed: %w", out.Err)
@@ -1916,12 +1993,22 @@ func moveAppBundleToTrashWithAdmin(ctx context.Context, runner Runner, appPath s
 // macOS flags and write bits. It deliberately never falls back to permanent
 // deletion; paths that macOS refuses to trash are reported to the caller.
 func movePathToTrashStubborn(ctx context.Context, runner Runner, p string) error {
-	if err := movePathToTrash(ctx, runner, p); err == nil {
+	return movePathToTrashStubbornWithIdentity(ctx, runner, p, "")
+}
+
+func movePathToTrashStubbornWithIdentity(ctx context.Context, runner Runner, p, expectedIdentity string) error {
+	if err := movePathToTrashWithIdentity(ctx, runner, p, expectedIdentity); err == nil {
 		return nil
 	}
+	if expectedIdentity != "" && cleanPathIdentity(p) != expectedIdentity {
+		return errors.New("app bundle changed during uninstall")
+	}
 	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
+	if expectedIdentity != "" && cleanPathIdentity(p) != expectedIdentity {
+		return errors.New("app bundle changed during uninstall")
+	}
 	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
-	if err := movePathToTrash(ctx, runner, p); err == nil {
+	if err := movePathToTrashWithIdentity(ctx, runner, p, expectedIdentity); err == nil {
 		return nil
 	}
 	return fmt.Errorf("could not move to Trash")

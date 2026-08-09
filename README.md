@@ -82,6 +82,8 @@ Codex cleanup is limited to exact abandoned staging locations: Sparkle update en
 
 `bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies). It also scans the app for embedded helper bundles (XPC services, app extensions, and login-item helpers) and cleans their leftovers by exact bundle ID, while skipping protected identifiers so removal stays scoped to the app's own data.
 
+Before any uninstall side effect, Bloom binds the selected bundle's on-disk identity and scans its application roots again for other `.app` copies with the same Bundle ID. For a non-Homebrew app with a sibling copy, Bloom moves only the explicitly selected bundle to Trash and preserves shared leftovers, processes, login items, and Dock entries. For a Homebrew cask, Bloom refuses the uninstall instead of running the required `--zap` against data that a sibling may still use. An incomplete sibling scan is treated the same conservative way, and the scan is repeated at the action boundary.
+
 The interactive flow lives at menu item 3:
 
 - All apps start unselected. `Space` toggles. `Enter` removes the cursor item when nothing is selected, or every selected item otherwise.
@@ -90,11 +92,11 @@ The interactive flow lives at menu item 3:
 
 Per-app cleanup runs in this order so brew can detect and clean its own metadata and cask-defined zap leftovers:
 
-1. Quit the app, unload its `LaunchAgents`.
-2. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --force --zap <token>`, then verify with `brew list --cask`. Homebrew zap may remove extra cask-defined support or configuration files; Bloom then moves any remaining curated leftovers to Trash.
-3. Move the app bundle to the current user's Trash. Root-owned bundles, including many Mac App Store apps, may request terminal administrator authentication; Bloom still moves the bundle to Trash rather than permanently deleting it.
-4. Remove the matching `~/Library` entries only after the app bundle is gone.
-5. Remove the macOS Login Item, unregister the bundle from LaunchServices.
+1. Bind the selected bundle identity, scan for same-Bundle-ID copies, and verify Homebrew ownership; repeat those checks immediately before acting.
+2. Quit the app and unload its `LaunchAgents` when no sibling copy may depend on them.
+3. Detect the Homebrew cask via the `<prefix>/Caskroom/<token>/<version>` layout (resolved-symlink → bundle-name search → `brew list`/`info` fallback) and run `brew uninstall --cask --force --zap <token>`, then verify with `brew list --cask`. Homebrew zap may remove extra cask-defined support or configuration files; Bloom then moves any remaining curated leftovers to Trash.
+4. Move the app bundle to the current user's Trash. Root-owned bundles, including many Mac App Store apps, may request terminal administrator authentication; Bloom still moves the bundle to Trash rather than permanently deleting it.
+5. Remove the matching `~/Library` entries only after the app bundle is gone, then remove its Login Item and unregister the selected LaunchServices path.
 
 Dry runs and uninstall summaries print the exact Homebrew zap command when a cask is detected.
 

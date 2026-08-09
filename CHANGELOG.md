@@ -17,6 +17,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Report clean and uninstall totals using physical disk occupancy, bound directory size probes, and skip an unmeasurable clean target instead of trusting partial `du` output or stalling the remaining scan.
 - Clean Cargo registry archives, extracted sources, git caches, and Rustup downloads from validated `CARGO_HOME`/`RUSTUP_HOME` locations while preserving registry indexes and installed binaries, refusing active builds, redirected cache roots, and targets replaced during probing.
 - Reclaim abandoned Codex Desktop Sparkle and marketplace staging with exact path/identity gates, 30-day age fallback, version-aware pending-update protection, and process/open-file rechecks; completed marketplaces, backups, sessions, credentials, and configuration remain out of scope.
+- Protect apps that share a Bundle ID during uninstall: re-scan before side effects, move only the selected non-cask bundle while preserving shared state, and refuse the required Homebrew `--zap` when another copy exists or the scan is incomplete.
 
 ## v0.6.22 - 2026-07-29
 
