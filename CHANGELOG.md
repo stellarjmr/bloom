@@ -14,6 +14,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - Always merge hard clean-safety entries into existing whitelist configs, so older or replacement-style configs cannot silently enable Finder metadata cleanup.
 - Keep active application and developer-tool caches out of both clean previews and real runs, including live SQLite families, and recheck process/open-file state immediately before moving anything to Trash.
+- Report clean and uninstall totals using physical disk occupancy, bound directory size probes, and skip an unmeasurable clean target instead of trusting partial `du` output or stalling the remaining scan.
 
 ## v0.6.22 - 2026-07-29
 

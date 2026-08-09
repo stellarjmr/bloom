@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -130,16 +132,16 @@ func walkAppDir(ctx context.Context, root string, seen map[string]bool, out *[]A
 					if !strings.HasSuffix(strings.ToLower(child.Name()), ".app") {
 						continue
 					}
-					addAppEntry(filepath.Join(full, child.Name()), seen, out)
+					addAppEntry(ctx, filepath.Join(full, child.Name()), seen, out)
 				}
 			}
 			continue
 		}
-		addAppEntry(full, seen, out)
+		addAppEntry(ctx, full, seen, out)
 	}
 }
 
-func addAppEntry(path string, seen map[string]bool, out *[]AppEntry) {
+func addAppEntry(ctx context.Context, path string, seen map[string]bool, out *[]AppEntry) {
 	if seen[path] {
 		return
 	}
@@ -152,7 +154,7 @@ func addAppEntry(path string, seen map[string]bool, out *[]AppEntry) {
 		Name: strings.TrimSuffix(filepath.Base(path), ".app"),
 	}
 	entry.BundleID = readBundleID(path)
-	entry.SizeKB = directorySizeKB(path)
+	entry.SizeKB, _ = pathSizeKB(ctx, OSRunner{}, path)
 	entry.LastUsedEpoch = readLastUsedEpoch(path)
 	*out = append(*out, entry)
 }
@@ -473,26 +475,6 @@ func bundleIDComponents(id string) []string {
 
 func bundleIDEqual(id, want string) bool {
 	return strings.EqualFold(id, want)
-}
-
-func directorySizeKB(path string) int64 {
-	cmd := exec.Command("/usr/bin/du", "-sk", path)
-	out, err := cmd.Output()
-	if err != nil {
-		return 0
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return 0
-	}
-	var size int64
-	for _, c := range fields[0] {
-		if c < '0' || c > '9' {
-			break
-		}
-		size = size*10 + int64(c-'0')
-	}
-	return size
 }
 
 // FindRelatedPaths returns every cleanup candidate for the given app.
@@ -1021,7 +1003,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	pathSizes := make(map[string]int64, len(paths))
 	appBundlePlanned := false
 	for _, p := range paths {
-		pathSizes[p] = pathSizeKB(p)
+		pathSizes[p], _ = pathSizeKB(ctx, OSRunner{}, p)
 		if p == app.Path {
 			appBundlePlanned = true
 		}
@@ -1945,15 +1927,88 @@ func movePathToTrashStubborn(ctx context.Context, runner Runner, p string) error
 	return fmt.Errorf("could not move to Trash")
 }
 
-func pathSizeKB(p string) int64 {
+const pathSizeProbeTimeout = 10 * time.Second
+
+func pathSizeKB(ctx context.Context, runner Runner, p string) (int64, error) {
+	return pathSizeKBWithTimeout(ctx, runner, p, pathSizeProbeTimeout)
+}
+
+func pathSizeKBWithTimeout(ctx context.Context, runner Runner, p string, timeout time.Duration) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	info, err := os.Lstat(p)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	if info.Mode().IsRegular() {
-		return (info.Size() + 1023) / 1024
+	if runner == nil {
+		runner = OSRunner{}
 	}
-	return directorySizeKB(p)
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	trimmed := strings.TrimRight(p, string(os.PathSeparator))
+	if info.IsDir() && strings.EqualFold(filepath.Ext(trimmed), ".app") {
+		metadataCtx, metadataCancel := context.WithTimeout(probeCtx, 2*time.Second)
+		out := runner.Run(metadataCtx, "/usr/bin/mdls", "-name", "kMDItemPhysicalSize", "-raw", p)
+		metadataErr := metadataCtx.Err()
+		metadataCancel()
+		if out.Err == nil && metadataErr == nil {
+			if bytes, parseErr := parseNonNegativeInt(strings.TrimSpace(out.Stdout)); parseErr == nil && bytes > 0 {
+				return (bytes + 1023) / 1024, nil
+			}
+		}
+	}
+
+	if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Blocks >= 0 {
+			return (int64(stat.Blocks) + 1) / 2, nil
+		}
+	}
+
+	out := runner.Run(probeCtx, "/usr/bin/du", "-skP", p)
+	if probeCtx.Err() != nil {
+		return 0, fmt.Errorf("disk usage probe timed out: %w", probeCtx.Err())
+	}
+	if out.Err != nil {
+		return 0, fmt.Errorf("disk usage probe failed: %w", out.Err)
+	}
+	size, err := parseDiskUsageKB(out.Stdout)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
+func parseDiskUsageKB(output string) (int64, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		return 0, errors.New("invalid disk usage output")
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) < 2 {
+		return 0, errors.New("invalid disk usage output")
+	}
+	size, err := parseNonNegativeInt(fields[0])
+	if err != nil {
+		return 0, errors.New("invalid disk usage output")
+	}
+	return size, nil
+}
+
+func parseNonNegativeInt(value string) (int64, error) {
+	if value == "" {
+		return 0, errors.New("empty number")
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, errors.New("not a non-negative integer")
+		}
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 // FormatBytes returns a short human readable size from KB.

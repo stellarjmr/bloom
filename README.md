@@ -72,7 +72,7 @@ Homebrew casks and other `.app` bundles are handled by `bm uninstall`, which inc
 
 `bm clean` moves safe, rebuildable cache and temporary files to the macOS Trash. It is conservative by design: protected system paths, Trash, iCloud/Mobile Documents, Apple Notes, Apple Mail, Keychains, Safari/Cookies, browser history/cookies, LaunchAgents/LaunchDaemons, Messages, Reminders, Photos libraries, Finder metadata, active application/developer-tool caches, live SQLite families, and other high-value data are skipped or rejected instead of cleaned. Hard safety entries remain protected even when loading an older or replacement-style whitelist, and activity is checked again immediately before a Trash move.
 
-The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect.
+The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.
 
 ## Uninstall
 
@@ -81,7 +81,7 @@ The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview t
 The interactive flow lives at menu item 3:
 
 - All apps start unselected. `Space` toggles. `Enter` removes the cursor item when nothing is selected, or every selected item otherwise.
-- Each row shows the app name, on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.
+- Each row shows the app name, physical on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.
 - The summary lists every removed path under each app (`✓` removed, `·` would-remove).
 
 Per-app cleanup runs in this order so brew can detect and clean its own metadata and cask-defined zap leftovers:

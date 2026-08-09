@@ -22,7 +22,7 @@ func (r *cleanProbeRunner) LookPath(file string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-func (r *cleanProbeRunner) Run(_ context.Context, name string, _ ...string) CommandOutput {
+func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
 	switch name {
 	case "ps":
 		index := r.psCalls
@@ -37,7 +37,7 @@ func (r *cleanProbeRunner) Run(_ context.Context, name string, _ ...string) Comm
 	case "lsof":
 		return r.lsofOutput
 	default:
-		return CommandOutput{Err: os.ErrInvalid}
+		return OSRunner{}.Run(ctx, name, args...)
 	}
 }
 

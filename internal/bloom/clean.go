@@ -360,7 +360,12 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			continue
 		}
 
-		sizeKB := pathSizeKB(target.Path)
+		sizeKB, err := pathSizeKB(ctx, runner, target.Path)
+		if err != nil {
+			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: "size unavailable: " + err.Error()})
+			logCleanOperation("trash", "0", "error", target.Path)
+			continue
+		}
 		target.SizeKB = sizeKB
 		// Sizing can be slow enough for an owner to start or open a database.
 		// Refresh before even promising the target in a dry-run result.

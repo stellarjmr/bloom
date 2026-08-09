@@ -818,11 +818,12 @@ func (a *App) runUninstall(args []string) int {
 	for _, path := range values {
 		entry, ok := byPath[path]
 		if !ok {
+			sizeKB, _ := pathSizeKB(ctx, OSRunner{}, path)
 			entry = AppEntry{
 				Path:     path,
 				Name:     filepath.Base(strings.TrimSuffix(strings.TrimRight(path, "/"), ".app")),
 				BundleID: readBundleID(path),
-				SizeKB:   directorySizeKB(path),
+				SizeKB:   sizeKB,
 			}
 		}
 		if _, err := os.Stat(entry.Path); err != nil {
