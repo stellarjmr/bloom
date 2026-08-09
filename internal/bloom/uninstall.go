@@ -519,6 +519,7 @@ func FindRelatedPaths(app AppEntry) []string {
 			}
 		}
 	}
+	matchBundleLeafExactPaths(home, app, &paths)
 	matchGroupContainers(app, &paths)
 	matchDiagnosticReports(app, &paths)
 	matchCrashReporterPlists(app, &paths)
@@ -646,6 +647,90 @@ func leftoverNameToken(app AppEntry) string {
 		return ""
 	}
 	return name
+}
+
+// bundleLeafDataDirVariants derives narrowly evidenced literal data-directory
+// names from the final Bundle ID component. Some apps extend their display
+// name there (AyuGram -> AyuGramDesktop) while keeping that extended name for
+// their data directory. The leaf must extend this app's own name at a clear
+// word boundary; a leaf naming another product must never become a candidate.
+func bundleLeafDataDirVariants(app AppEntry) []string {
+	if !looksLikeBundleID(app.BundleID) {
+		return nil
+	}
+	appName := strings.TrimSpace(app.Name)
+	if utf8.RuneCountInString(appName) < 3 {
+		return nil
+	}
+	parts := strings.Split(app.BundleID, ".")
+	bundleLeaf := parts[len(parts)-1]
+	if len(bundleLeaf) < 8 || strings.EqualFold(bundleLeaf, appName) || !hasLowerUpperTransition(bundleLeaf) {
+		return nil
+	}
+	appNameNoSpaces := strings.ReplaceAll(appName, " ", "")
+	if utf8.RuneCountInString(appNameNoSpaces) < 3 || len(appNameNoSpaces) >= len(bundleLeaf) {
+		return nil
+	}
+	if !strings.EqualFold(bundleLeaf[:len(appNameNoSpaces)], appNameNoSpaces) {
+		return nil
+	}
+	rest := bundleLeaf[len(appNameNoSpaces):]
+	if rest == "" || !isASCIIUpperOrDigit(rest[0]) {
+		return nil
+	}
+	return uniqueStrings([]string{
+		bundleLeaf,
+		appName + " " + splitCamelASCII(rest),
+	})
+}
+
+func hasLowerUpperTransition(value string) bool {
+	for i := 1; i < len(value); i++ {
+		if value[i-1] >= 'a' && value[i-1] <= 'z' && value[i] >= 'A' && value[i] <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIUpperOrDigit(value byte) bool {
+	return (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
+}
+
+func splitCamelASCII(value string) string {
+	var out strings.Builder
+	out.Grow(len(value) + 4)
+	for i := 0; i < len(value); i++ {
+		current := value[i]
+		if i > 0 && current >= 'A' && current <= 'Z' {
+			previous := value[i-1]
+			nextIsLower := i+1 < len(value) && value[i+1] >= 'a' && value[i+1] <= 'z'
+			if (previous >= 'a' && previous <= 'z') ||
+				(previous >= '0' && previous <= '9') ||
+				(previous >= 'A' && previous <= 'Z' && nextIsLower) {
+				out.WriteByte(' ')
+			}
+		}
+		out.WriteByte(current)
+	}
+	return out.String()
+}
+
+func matchBundleLeafExactPaths(home string, app AppEntry, out *[]string) {
+	for _, variant := range bundleLeafDataDirVariants(app) {
+		paths := []string{
+			filepath.Join(home, "Library", "Application Support", variant),
+			filepath.Join(home, "Library", "Caches", variant),
+			filepath.Join(home, "Library", "Logs", variant),
+			filepath.Join(home, "Library", "Preferences", variant+".plist"),
+			filepath.Join(home, "Library", "Saved Application State", variant+".savedState"),
+		}
+		for _, path := range paths {
+			if !shouldProtectCleanPath(path) {
+				*out = append(*out, path)
+			}
+		}
+	}
 }
 
 // nameTokenLeftoverAllowed guards fuzzy display-name matches against trashing

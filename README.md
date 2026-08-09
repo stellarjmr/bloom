@@ -82,6 +82,8 @@ Codex cleanup is limited to exact abandoned staging locations: Sparkle update en
 
 `bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies). It also scans the app for embedded helper bundles (XPC services, app extensions, and login-item helpers) and cleans their leftovers by exact bundle ID, while skipping protected identifiers so removal stays scoped to the app's own data.
 
+For apps whose data name extends the display name in the final Bundle ID component, Bloom also checks two literal variants. For example, `AyuGram` with `one.ayugram.AyuGramDesktop` can match `AyuGramDesktop` and `AyuGram Desktop`. This derivation requires a valid Bundle ID, a sufficiently long camel-case leaf that extends the app's own name at an uppercase-or-digit boundary, and exact paths only—no globs or fully re-split product names.
+
 Before any uninstall side effect, Bloom binds the selected bundle's on-disk identity and scans its application roots again for other `.app` copies with the same Bundle ID. For a non-Homebrew app with a sibling copy, Bloom moves only the explicitly selected bundle to Trash and preserves shared leftovers, processes, login items, and Dock entries. For a Homebrew cask, Bloom refuses the uninstall instead of running the required `--zap` against data that a sibling may still use. An incomplete sibling scan is treated the same conservative way, and the scan is repeated at the action boundary.
 
 The interactive flow lives at menu item 3:
