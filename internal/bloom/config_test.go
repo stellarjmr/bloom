@@ -52,6 +52,39 @@ exclude = ["legacy"]
 	}
 }
 
+func TestLoadConfigMergesHardCleanSafetyWhitelist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `
+[clean]
+whitelist = ["~/.cache/custom-keep/*"]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(cfg.Clean.Whitelist, "~/.cache/custom-keep/*") {
+		t.Fatalf("custom clean whitelist entry was lost: %#v", cfg.Clean.Whitelist)
+	}
+	if !containsString(cfg.Clean.Whitelist, cleanFinderMetadataSentinel) {
+		t.Fatalf("hard safety whitelist was not merged: %#v", cfg.Clean.Whitelist)
+	}
+}
+
+func TestConfigTextPersistsHardCleanSafetyWhitelist(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = []string{"~/.cache/custom-keep/*"}
+
+	text := ConfigText(cfg)
+	if !strings.Contains(text, `"FINDER_METADATA"`) {
+		t.Fatalf("ConfigText omitted hard safety whitelist:\n%s", text)
+	}
+}
+
 func TestNoColorEnvironmentAppliesAtRenderTimeOnly(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 

@@ -256,6 +256,16 @@ func TestRunCleanDryRunHonorsWhitelistAndNeverCleansTrash(t *testing.T) {
 	}
 }
 
+func TestSetCleanWhitelistCannotRemoveHardSafetyEntries(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := SetCleanWhitelist(&cfg, []string{"~/.cache/custom-keep/*"}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(cfg.Clean.Whitelist, cleanFinderMetadataSentinel) {
+		t.Fatalf("hard safety entry was removed: %#v", cfg.Clean.Whitelist)
+	}
+}
+
 func TestRunCleanNeverTargetsHighValueCachesEvenWithoutWhitelist(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

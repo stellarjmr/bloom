@@ -123,6 +123,7 @@ func LoadConfig(path string) (Config, error) {
 	if err := scanner.Err(); err != nil {
 		return cfg, err
 	}
+	cfg.Clean.Whitelist = effectiveCleanWhitelist(cfg.Clean.Whitelist)
 	return cfg, nil
 }
 
@@ -162,6 +163,7 @@ func DefaultConfigText() string {
 }
 
 func ConfigText(cfg Config) string {
+	cfg.Clean.Whitelist = effectiveCleanWhitelist(cfg.Clean.Whitelist)
 	var b strings.Builder
 	fmt.Fprintln(&b, "# bm config")
 	fmt.Fprintln(&b)

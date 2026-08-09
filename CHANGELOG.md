@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Changed
+
+- Always merge hard clean-safety entries into existing whitelist configs, so older or replacement-style configs cannot silently enable Finder metadata cleanup.
+
 ## v0.6.22 - 2026-07-29
 
 ### Fixed

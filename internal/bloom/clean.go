@@ -93,6 +93,20 @@ func DefaultCleanWhitelist() []string {
 	}
 }
 
+// SafetyCleanWhitelist contains non-optional cleanup protections. Unlike the
+// convenience defaults above, these entries are merged into old and custom
+// configs so a replacement-style whitelist cannot silently opt out of a safety
+// rule added by a newer Bloom version.
+func SafetyCleanWhitelist() []string {
+	return []string{cleanFinderMetadataSentinel}
+}
+
+func effectiveCleanWhitelist(patterns []string) []string {
+	combined := append([]string{}, patterns...)
+	combined = append(combined, SafetyCleanWhitelist()...)
+	return normalizeCleanWhitelist(combined)
+}
+
 func CleanWhitelistItems() []CleanItem {
 	return []CleanItem{
 		{Label: "Apple Mail cache", Pattern: "~/Library/Caches/com.apple.mail/*", Category: "system_cache"},
@@ -191,7 +205,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Trash", Pattern: "~/.Trash", Category: "system_cache"},
 		{Label: "iOS/iPadOS device firmware (.ipsw) from iTunes/Finder", Pattern: "~/Library/iTunes/*Software Updates/*.ipsw", Category: "system_cache"},
 		{Label: "Apple Configurator 2 device firmware (.ipsw)", Pattern: "~/Library/Group Containers/*.group.com.apple.configurator/**/*.ipsw", Category: "system_cache"},
-		{Label: "Finder metadata, .DS_Store", Pattern: cleanFinderMetadataSentinel, Category: "system_cache"},
 	}
 }
 
@@ -208,7 +221,7 @@ func SetCleanWhitelist(cfg *Config, selected []string) error {
 	}
 	combined := append([]string{}, selected...)
 	combined = append(combined, custom...)
-	cfg.Clean.Whitelist = normalizeCleanWhitelist(combined)
+	cfg.Clean.Whitelist = effectiveCleanWhitelist(combined)
 	return nil
 }
 
@@ -237,6 +250,9 @@ func cleanPredefinedPatterns() map[string]bool {
 		patterns[expandedCleanPattern(item.Pattern)] = true
 	}
 	for _, pattern := range DefaultCleanWhitelist() {
+		patterns[expandedCleanPattern(pattern)] = true
+	}
+	for _, pattern := range SafetyCleanWhitelist() {
 		patterns[expandedCleanPattern(pattern)] = true
 	}
 	return patterns
@@ -296,7 +312,7 @@ func portableCleanPattern(pattern string) string {
 }
 
 func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
-	whitelist := normalizeCleanWhitelist(opts.Config.Clean.Whitelist)
+	whitelist := effectiveCleanWhitelist(opts.Config.Clean.Whitelist)
 	res := CleanResult{DryRun: opts.DryRun, Whitelist: whitelist}
 	runner := opts.Runner
 	if runner == nil {
