@@ -47,6 +47,7 @@ type CleanTarget struct {
 	// identity binds discovery to the final Trash boundary so replacing a
 	// cache entry during a slow size/process probe cannot redirect the move.
 	identity string
+	special  *cleanSpecialTarget
 }
 
 type CleanSkip struct {
@@ -333,6 +334,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 
 	activity := &cleanActivityProbe{runner: runner}
 	candidates := discoverCleanCandidates(whitelist)
+	candidates = append(candidates, discoverCodexStagingTargets(ctx, runner, time.Now())...)
 	pending := make([]CleanTarget, 0, len(candidates))
 	for _, target := range candidates {
 		if ctx.Err() != nil {
@@ -343,7 +345,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "trash"})
 			continue
 		}
-		if shouldProtectCleanPath(target.Path) {
+		if shouldProtectCleanPath(target.Path) && target.special == nil {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "protected"})
 			continue
 		}
@@ -351,7 +353,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "whitelist"})
 			continue
 		}
-		if err := validateCleanPath(target.Path); err != nil {
+		if err := validateCleanTargetPath(target); err != nil {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "invalid: " + err.Error()})
 			logCleanOperation("trash", "0", "rejected", target.Path)
 			continue
@@ -360,7 +362,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "open incomplete download"})
 			continue
 		}
-		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -375,7 +377,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		// Sizing can be slow enough for an owner to start or open a database.
 		// Refresh before even promising the target in a dry-run result.
 		activity.refresh(ctx)
-		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -404,7 +406,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		// This is the action boundary. Refresh per target because earlier Trash
 		// moves may take long enough for a later cache owner to start.
 		activity.refresh(ctx)
-		if reason := activity.skipReason(ctx, target.Path); reason != "" {
+		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -412,7 +414,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "path changed during clean"})
 			continue
 		}
-		if err := moveCleanPathToTrash(ctx, runner, target.Path, target.identity); err != nil {
+		if err := moveCleanTargetToTrash(ctx, runner, target); err != nil {
 			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: err.Error()})
 			logCleanOperation("trash", cleanLogSize(target.SizeKB), "error", target.Path)
 			continue

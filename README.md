@@ -76,6 +76,8 @@ The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview t
 
 Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets Cargo registry archives/extracted sources, Cargo git caches, Rustup downloads, and documentation caches only; registry indexes, Cargo-installed binaries, and toolchain binaries stay untouched. Active Rust builds and cache roots that escape their selected tool home are skipped.
 
+Codex cleanup is limited to exact abandoned staging locations: Sparkle update entries and marketplace directories with the `openai-bundled.staging-`, `marketplace-upgrade-`, or `marketplace-add-` prefixes. Bloom keeps newer pending desktop updates, completed marketplaces, backups, sessions, credentials, and configuration. Unknown versions fall back to a 30-day age gate, and any active Codex/Sparkle process, open staging file, path redirection, or changed identity stops the Trash move.
+
 ## Uninstall
 
 `bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies). It also scans the app for embedded helper bundles (XPC services, app extensions, and login-item helpers) and cleans their leftovers by exact bundle ID, while skipping protected identifiers so removal stays scoped to the app's own data.
