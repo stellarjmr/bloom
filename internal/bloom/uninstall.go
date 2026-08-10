@@ -1101,6 +1101,14 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		res.Err = fmt.Errorf("app bundle not found: %s", app.Path)
 		return res
 	}
+	identityAnchor, err := pinUninstallAppIdentity(app.Path, selectedIdentity)
+	if err != nil {
+		res.Err = fmt.Errorf("could not secure app bundle identity: %w", err)
+		return res
+	}
+	if identityAnchor != nil {
+		defer identityAnchor.Close()
+	}
 	boundBundleID := readBundleID(app.Path)
 	if boundBundleID != "" {
 		app.BundleID = boundBundleID

@@ -24,6 +24,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Read iOS/iPadOS `Wrapper/*.app/Info.plist` identities during app discovery and sibling checks, while treating unreadable or malformed candidate metadata as an incomplete safety scan.
 - Clean mise/XDG pnpm store generations under `~/.local/share/pnpm/store` with the same active pnpm/Corepack and redirected-path guards as the standard macOS store, keeping every Bloom removal recoverable in Trash.
 
+### Fixed
+
+- Pin the selected app bundle's filesystem identity throughout uninstall planning so a delete-and-recreate race cannot disguise a replacement bundle through inode reuse.
+
 ## v0.6.22 - 2026-07-29
 
 ### Fixed

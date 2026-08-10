@@ -60,6 +60,40 @@ func uninstallAppIdentityMatches(app AppEntry, expectedIdentity, expectedBundleI
 	return bundleIDEqual(readBundleID(app.Path), expectedBundleID)
 }
 
+// pinUninstallAppIdentity keeps the selected bundle's inode alive while the
+// uninstall plan is built. Without the open directory descriptor, a
+// delete-and-recreate race can reuse the same device/inode pair before the
+// action-boundary check and make a replacement look like the selected app.
+// Symlinks retain the existing lstat-based checks because os.Open follows
+// them rather than pinning the link itself.
+func pinUninstallAppIdentity(path, expectedIdentity string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if expectedIdentity == "" || cleanPathIdentity(path) != expectedIdentity {
+		return nil, errors.New("app bundle changed during uninstall")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, nil
+	}
+
+	anchor, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	anchoredInfo, err := anchor.Stat()
+	if err != nil {
+		_ = anchor.Close()
+		return nil, err
+	}
+	if !os.SameFile(info, anchoredInfo) || cleanPathIdentity(path) != expectedIdentity {
+		_ = anchor.Close()
+		return nil, errors.New("app bundle changed during uninstall")
+	}
+	return anchor, nil
+}
+
 func uniqueSortedStrings(values []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(values))
