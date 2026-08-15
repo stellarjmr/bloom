@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-func TestParseYaziPlugins(t *testing.T) {
-	got := parseYaziPlugins(`
+func TestParseYaziPackages(t *testing.T) {
+	got := parseYaziPackages(`
 Plugins:
   foo/bar (abc123)
   baz (def456)
@@ -20,6 +20,7 @@ Flavors:
 	want := map[string]string{
 		"foo/bar": "abc123",
 		"baz":     "def456",
+		"theme":   "zzz",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
@@ -461,12 +462,12 @@ func TestRunAmpUsesOfficialUpdateCommand(t *testing.T) {
 	}
 }
 
-func TestRunYaziUsesOfficialPackageUpdateCommand(t *testing.T) {
+func TestRunYaziUpdatesAllPackagesByDefault(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"ya": true},
 		outputs: map[string]CommandOutput{
-			"ya pkg list":            {Stdout: "Plugins:\n  foo/bar (abc123)\n"},
-			"ya pkg upgrade foo/bar": {},
+			"ya pkg list":    {Stdout: "Plugins:\n  foo/bar (abc123)\nFlavors:\n  foo/theme (def456)\n"},
+			"ya pkg upgrade": {},
 		},
 	}
 
@@ -476,7 +477,34 @@ func TestRunYaziUsesOfficialPackageUpdateCommand(t *testing.T) {
 	}
 	want := []string{
 		"ya pkg list",
-		"ya pkg upgrade foo/bar",
+		"ya pkg upgrade",
+		"ya pkg list",
+	}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+func TestRunYaziPassesPackageIDsWhenFiltered(t *testing.T) {
+	r := &recordingRunner{
+		paths: map[string]bool{"ya": true},
+		outputs: map[string]CommandOutput{
+			"ya pkg list":              {Stdout: "Plugins:\n  foo/bar (abc123)\nFlavors:\n  foo/theme (def456)\n"},
+			"ya pkg upgrade foo/theme": {},
+		},
+	}
+	cfg := DefaultConfig()
+	taskCfg := cfg.Tasks["yazi"]
+	taskCfg.Include = []string{"foo/theme"}
+	cfg.Tasks["yazi"] = taskCfg
+
+	res := runYazi(context.Background(), r, UpdateOptions{Config: cfg})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{
+		"ya pkg list",
+		"ya pkg upgrade foo/theme",
 		"ya pkg list",
 	}
 	if !reflect.DeepEqual(r.calls, want) {

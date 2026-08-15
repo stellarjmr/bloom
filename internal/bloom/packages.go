@@ -49,7 +49,7 @@ func ListTaskPackages(ctx context.Context, r Runner, task string) ([]string, err
 		if out.Err != nil {
 			return nil, out.Err
 		}
-		return mapNames(parseYaziPlugins(out.Stdout)), nil
+		return mapNames(parseYaziPackages(out.Stdout)), nil
 	case "nvim":
 		return mapNames(loadNeovimPackages()), nil
 	case "mason":

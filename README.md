@@ -53,7 +53,7 @@ The default task set updates everything Bloom can detect:
 - `brew`: Homebrew formula updates
 - `cask`: Homebrew cask updates
 - `amp`: `amp update`
-- `yazi`: Yazi plugin updates
+- `yazi`: all Yazi package updates, including plugins and flavors
 - `nvim`: Neovim plugin updates for lazy.nvim/LazyVim and `vim.pack`
 - `mason`: Mason package updates
 - `npm`: global npm package updates

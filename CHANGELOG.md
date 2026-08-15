@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Fixed
+
+- Update all Yazi plugins and flavors with `ya pkg upgrade` by default; only pass package IDs when Yazi include/exclude filters are configured.
+
 ## v0.6.23 - 2026-08-10
 
 ### Changed

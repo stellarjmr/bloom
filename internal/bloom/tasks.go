@@ -72,7 +72,7 @@ var builtinTasks = map[string]Task{
 	},
 	"yazi": {
 		Name:            "yazi",
-		Description:     "Update Yazi plugins",
+		Description:     "Update Yazi plugins and flavors",
 		RequiredCommand: "ya",
 		Run:             runYazi,
 	},
@@ -390,22 +390,26 @@ func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return res
 	}
 	beforeOut := r.Run(ctx, "ya", "pkg", "list")
-	before := parseYaziPlugins(beforeOut.Stdout)
-	selected := filterNames(mapNames(before), opts.Config.Tasks["yazi"])
+	before := parseYaziPackages(beforeOut.Stdout)
+	taskCfg := opts.Config.Tasks["yazi"]
+	selected := filterNames(mapNames(before), taskCfg)
 	before = pickVersionMap(before, selected)
 	if opts.DryRun {
-		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d plugins", len(selected)), Summary: summaryLines(selected)}
+		return TaskResult{Status: StatusDryRun, Message: fmt.Sprintf("%d packages", len(selected)), Summary: summaryLines(selected)}
 	}
-	if len(selected) == 0 {
+	if hasPackageFilter(taskCfg) && len(selected) == 0 {
 		return TaskResult{Status: StatusOK}
 	}
-	args := append([]string{"pkg", "upgrade"}, selected...)
+	args := []string{"pkg", "upgrade"}
+	if hasPackageFilter(taskCfg) {
+		args = append(args, selected...)
+	}
 	upgrade := r.Run(ctx, "ya", args...)
 	if upgrade.Err != nil {
 		return failed(upgrade)
 	}
 	afterOut := r.Run(ctx, "ya", "pkg", "list")
-	after := pickVersionMap(parseYaziPlugins(afterOut.Stdout), selected)
+	after := pickVersionMap(parseYaziPackages(afterOut.Stdout), selected)
 	summary := diffVersionMap(before, after)
 	if len(summary) == 0 {
 		return TaskResult{Status: StatusOK}
@@ -748,20 +752,17 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func parseYaziPlugins(output string) map[string]string {
-	plugins := map[string]string{}
-	inPlugins := false
+func parseYaziPackages(output string) map[string]string {
+	packages := map[string]string{}
+	inPackages := false
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		switch line {
-		case "Plugins:":
-			inPlugins = true
-			continue
-		case "Flavors:":
-			inPlugins = false
+		case "Plugins:", "Flavors:":
+			inPackages = true
 			continue
 		}
-		if !inPlugins || line == "" {
+		if !inPackages || line == "" {
 			continue
 		}
 		name := line
@@ -771,10 +772,10 @@ func parseYaziPlugins(output string) map[string]string {
 			rev = strings.TrimSuffix(line[open+1:], ")")
 		}
 		if name != "" {
-			plugins[name] = rev
+			packages[name] = rev
 		}
 	}
-	return plugins
+	return packages
 }
 
 func parseNPMGlobals(output string) map[string]string {
