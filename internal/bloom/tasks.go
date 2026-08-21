@@ -251,7 +251,9 @@ func updateHomebrewMetadataForTask(ctx context.Context, r Runner, opts UpdateOpt
 func runHomebrewUpdate(ctx context.Context, r Runner) CommandOutput {
 	var out CommandOutput
 	for attempt := 0; ; attempt++ {
-		out = r.Run(ctx, "brew", "update")
+		// Bypass Homebrew's API fast path so newly published third-party tap
+		// commits are fetched before Bloom checks for outdated packages.
+		out = r.Run(ctx, "brew", "update", "--force")
 		if out.Err == nil || !isHomebrewUpdateLockError(out) || attempt >= homebrewUpdateLockMaxRetries {
 			break
 		}

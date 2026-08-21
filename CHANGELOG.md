@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Fixed
+
+- Force-refresh Homebrew metadata before checking or upgrading packages so newly published third-party tap updates are not missed by Homebrew's API fast path.
+
 ## v0.6.24 - 2026-08-15
 
 ### Fixed

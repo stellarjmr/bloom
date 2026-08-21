@@ -146,7 +146,7 @@ func TestRunCheckOutputsTSV(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true, "npm": true},
 		outputs: map[string]CommandOutput{
-			"brew update":                           {},
+			"brew update --force":                   {},
 			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
 			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
 			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},

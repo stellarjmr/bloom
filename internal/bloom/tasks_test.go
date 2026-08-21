@@ -261,11 +261,11 @@ func TestRemovePackagesMasonFailsWithoutSentinel(t *testing.T) {
 	}
 }
 
-func TestRunBrewFormulaeUpdatesMetadataBeforeOutdated(t *testing.T) {
+func TestRunBrewFormulaeForceRefreshesMetadataBeforeOutdated(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true},
 		outputs: map[string]CommandOutput{
-			"brew update":                        {},
+			"brew update --force":                {},
 			"brew outdated --quiet --formula":    {Stdout: "bloom\n"},
 			"brew list --formula --full-name":    {Stdout: "stellarjmr/tool/bloom\n"},
 			"brew upgrade stellarjmr/tool/bloom": {},
@@ -277,7 +277,7 @@ func TestRunBrewFormulaeUpdatesMetadataBeforeOutdated(t *testing.T) {
 		t.Fatal(res.Err)
 	}
 	want := []string{
-		"brew update",
+		"brew update --force",
 		"brew outdated --quiet --formula",
 		"brew list --formula --full-name",
 		"brew upgrade stellarjmr/tool/bloom",
@@ -291,7 +291,7 @@ func TestRunBrewFormulaeAndCasksShareMetadataUpdate(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true},
 		outputs: map[string]CommandOutput{
-			"brew update":                           {},
+			"brew update --force":                   {},
 			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
 			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
 			"brew upgrade stellarjmr/tool/bloom":    {},
@@ -312,7 +312,7 @@ func TestRunBrewFormulaeAndCasksShareMetadataUpdate(t *testing.T) {
 	}
 
 	want := []string{
-		"brew update",
+		"brew update --force",
 		"brew outdated --quiet --formula",
 		"brew list --formula --full-name",
 		"brew upgrade stellarjmr/tool/bloom",
@@ -339,7 +339,7 @@ func TestRunHomebrewUpdateRetriesBusyLock(t *testing.T) {
 	r := &sequenceRunner{
 		paths: map[string]bool{"brew": true},
 		outputs: map[string][]CommandOutput{
-			"brew update": {
+			"brew update --force": {
 				{Err: errors.New("exit status 1"), Stderr: "lockf: 200: already locked\nError: Another `brew update` process is already running."},
 				{},
 			},
@@ -350,7 +350,7 @@ func TestRunHomebrewUpdateRetriesBusyLock(t *testing.T) {
 	if out.Err != nil {
 		t.Fatalf("runHomebrewUpdate returned error after retry: %v", out.Err)
 	}
-	want := []string{"brew update", "brew update"}
+	want := []string{"brew update --force", "brew update --force"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", r.calls, want)
 	}
@@ -382,7 +382,7 @@ func TestCheckUpdatesUsesOfficialCheckCommands(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true, "npm": true},
 		outputs: map[string]CommandOutput{
-			"brew update":                           {},
+			"brew update --force":                   {},
 			"brew outdated --quiet --formula":       {Stdout: "bloom\n"},
 			"brew list --formula --full-name":       {Stdout: "stellarjmr/tool/bloom\n"},
 			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
@@ -404,7 +404,7 @@ func TestCheckUpdatesUsesOfficialCheckCommands(t *testing.T) {
 	}
 
 	wantCalls := []string{
-		"brew update",
+		"brew update --force",
 		"brew outdated --quiet --formula",
 		"brew list --formula --full-name",
 		"brew outdated --quiet --cask --greedy",
@@ -419,7 +419,7 @@ func TestRunBrewCasksUsesOfficialHomebrewCommands(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true},
 		outputs: map[string]CommandOutput{
-			"brew update":                           {},
+			"brew update --force":                   {},
 			"brew outdated --quiet --cask --greedy": {Stdout: "iterm2\n"},
 			"brew upgrade --cask --greedy iterm2":   {},
 		},
@@ -430,7 +430,7 @@ func TestRunBrewCasksUsesOfficialHomebrewCommands(t *testing.T) {
 		t.Fatal(res.Err)
 	}
 	want := []string{
-		"brew update",
+		"brew update --force",
 		"brew outdated --quiet --cask --greedy",
 		"brew upgrade --cask --greedy iterm2",
 	}
