@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+- Treat stale SQLite `-shm` sidecars as cleanup candidates when bounded open-file checks prove the database family is idle, while continuing to fail closed on live or inconclusive state.
+
 ## v0.6.25 - 2026-08-21
 
 ### Fixed

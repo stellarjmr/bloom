@@ -702,10 +702,7 @@ func cleanPathAtOrBelow(path, root string) bool {
 }
 
 func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) string {
-	families, live, uncertain := cleanSQLiteFamilies(path)
-	if live {
-		return "live SQLite cache"
-	}
+	families, uncertain := cleanSQLiteFamilies(path)
 	if uncertain {
 		return "SQLite state unknown"
 	}
@@ -744,18 +741,17 @@ func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) 
 	return "SQLite open-file state unknown"
 }
 
-func cleanSQLiteFamilies(path string) (families []string, live, uncertain bool) {
+func cleanSQLiteFamilies(path string) (families []string, uncertain bool) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, false, !errors.Is(err, os.ErrNotExist)
+		return nil, !errors.Is(err, os.ErrNotExist)
 	}
 	if !info.IsDir() {
 		base, ok := cleanSQLiteBasePath(path)
 		if !ok {
-			return nil, false, false
+			return nil, false
 		}
-		_, err := os.Lstat(base + "-shm")
-		return []string{base}, err == nil, err != nil && !errors.Is(err, os.ErrNotExist)
+		return []string{base}, false
 	}
 
 	rootDepth := pathDepth(path)
@@ -780,10 +776,6 @@ func cleanSQLiteFamilies(path string) (families []string, live, uncertain bool) 
 			}
 			return nil
 		}
-		if cleanIsSQLiteSharedMemoryPath(candidate) {
-			live = true
-			return filepath.SkipAll
-		}
 		if entry.IsDir() {
 			return nil
 		}
@@ -800,7 +792,7 @@ func cleanSQLiteFamilies(path string) (families []string, live, uncertain bool) 
 	if walkErr != nil {
 		uncertain = true
 	}
-	return families, live, uncertain && !live
+	return families, uncertain
 }
 
 func cleanSQLiteBasePath(path string) (string, bool) {
@@ -819,14 +811,6 @@ func cleanSQLiteBasePath(path string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func cleanIsSQLiteSharedMemoryPath(path string) bool {
-	if !strings.HasSuffix(strings.ToLower(path), "-shm") {
-		return false
-	}
-	_, ok := cleanSQLiteBasePath(path)
-	return ok
 }
 
 func discoverCleanCandidates(whitelist []string) []CleanTarget {

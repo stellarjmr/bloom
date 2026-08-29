@@ -757,7 +757,7 @@ func TestRunCleanSkipsLiveReverseDNSCacheOwner(t *testing.T) {
 	}
 }
 
-func TestRunCleanSkipsLiveSQLiteCacheInDryRunAndRealRun(t *testing.T) {
+func TestRunCleanSkipsSQLiteCacheWhenOpenFileStateIsUnknown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
@@ -780,12 +780,49 @@ func TestRunCleanSkipsLiveSQLiteCacheInDryRunAndRealRun(t *testing.T) {
 		if cleanResultContains(res, cache) {
 			t.Fatalf("live SQLite cache appeared in targets (dry-run=%v): %#v", dryRun, res.Targets)
 		}
-		if !cleanResultSkippedFor(res, cache, "live SQLite cache") {
-			t.Fatalf("live SQLite skip missing (dry-run=%v): %#v", dryRun, res.Skipped)
+		if !cleanResultSkippedFor(res, cache, "SQLite open-file state unknown") {
+			t.Fatalf("unknown SQLite state skip missing (dry-run=%v): %#v", dryRun, res.Skipped)
 		}
 		if _, err := os.Stat(db); err != nil {
-			t.Fatalf("live SQLite database was touched (dry-run=%v): %v", dryRun, err)
+			t.Fatalf("SQLite database with unknown state was touched (dry-run=%v): %v", dryRun, err)
 		}
+	}
+}
+
+func TestRunCleanMovesStaleSQLiteSharedMemoryCacheToTrash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	trash := filepath.Join(home, "trash-stub")
+	t.Setenv("BLOOM_TEST_TRASH_DIR", trash)
+	cache := filepath.Join(home, "Library", "Caches", "SQLiteApp")
+	db := filepath.Join(cache, "Cache.db")
+	for _, path := range []string{db, db + "-wal", db + "-shm"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+	}
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if len(res.Failed) != 0 {
+		t.Fatalf("stale SQLite cleanup failed: %#v", res.Failed)
+	}
+	if !cleanResultContains(res, cache) {
+		t.Fatalf("stale SQLite cache missing from clean result: targets=%#v skipped=%#v", res.Targets, res.Skipped)
+	}
+	if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+		t.Fatalf("stale SQLite cache should have moved to Trash: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(trash, "SQLiteApp", "Cache.db-shm")); err != nil {
+		t.Fatalf("stale SQLite sidecar missing from Trash: %v", err)
 	}
 }
 
