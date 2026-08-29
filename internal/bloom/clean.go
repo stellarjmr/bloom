@@ -80,6 +80,9 @@ func DefaultCleanWhitelist() []string {
 	return []string{
 		"~/Library/Caches/ms-playwright*",
 		"~/.cache/huggingface*",
+		"~/.cache/torch*",
+		"~/.cache/tensorflow*",
+		"~/.cache/wandb*",
 		"~/.m2/repository/*",
 		"~/.gradle/caches/*",
 		"~/.gradle/daemon/*",
@@ -88,6 +91,8 @@ func DefaultCleanWhitelist() []string {
 		"~/Library/Application Support/com.nssurge.surge-mac/*",
 		"~/Library/Caches/org.R-project.R/R/renv/*",
 		"~/Library/Caches/pypoetry/virtualenvs*",
+		"~/.cache/poetry/virtualenvs*",
+		"~/Library/Caches/deno*",
 		"~/Library/Caches/JetBrains*",
 		"~/Library/Caches/com.jetbrains.toolbox*",
 		"~/Library/Caches/tealdeer/tldr-pages",
@@ -109,7 +114,16 @@ func DefaultCleanWhitelist() []string {
 // configs so a replacement-style whitelist cannot silently opt out of a safety
 // rule added by a newer Bloom version.
 func SafetyCleanWhitelist() []string {
-	return []string{cleanFinderMetadataSentinel}
+	return []string{
+		cleanFinderMetadataSentinel,
+		"~/.cache/huggingface*",
+		"~/.cache/torch*",
+		"~/.cache/tensorflow*",
+		"~/.cache/wandb*",
+		"~/Library/Caches/pypoetry/virtualenvs*",
+		"~/.cache/poetry/virtualenvs*",
+		"~/Library/Caches/deno*",
+	}
 }
 
 func effectiveCleanWhitelist(patterns []string) []string {
@@ -140,9 +154,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Go build cache", Pattern: "~/Library/Caches/go-build/*", Category: "compiler_cache"},
 		{Label: "Go module cache", Pattern: "~/go/pkg/mod/*", Category: "compiler_cache"},
 		{Label: "Rust Cargo registry cache", Pattern: "~/.cargo/registry/cache/*", Category: "compiler_cache"},
-		{Label: "Rust Cargo extracted sources", Pattern: "~/.cargo/registry/src/*", Category: "compiler_cache"},
-		{Label: "Rust Cargo git cache", Pattern: "~/.cargo/git/*", Category: "compiler_cache"},
-		{Label: "Rust documentation cache", Pattern: "~/.rustup/toolchains/*/share/doc/*", Category: "compiler_cache"},
 		{Label: "Rustup toolchain downloads", Pattern: "~/.rustup/downloads/*", Category: "compiler_cache"},
 		{Label: "ccache compiler cache", Pattern: "~/.ccache/*", Category: "compiler_cache"},
 		{Label: "sccache distributed compiler cache", Pattern: "~/.cache/sccache/*", Category: "compiler_cache"},
@@ -162,12 +173,13 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Flutter SDK cache", Pattern: "~/.cache/flutter/*", Category: "compiler_cache"},
 		{Label: "Swift Package Manager cache", Pattern: "~/.cache/swift-package-manager/*", Category: "compiler_cache"},
 		{Label: "Zig compiler cache", Pattern: "~/.cache/zig/*", Category: "compiler_cache"},
-		{Label: "Deno cache", Pattern: "~/Library/Caches/deno/*", Category: "compiler_cache"},
 		{Label: "Jupyter runtime files", Pattern: "~/.jupyter/runtime/*", Category: "compiler_cache"},
 		{Label: "CocoaPods cache (iOS dependencies)", Pattern: "~/Library/Caches/CocoaPods/*", Category: "package_manager"},
 		{Label: "npm package cache", Pattern: "~/.npm/_cacache/*", Category: "package_manager"},
 		{Label: "pip Python package cache", Pattern: "~/.cache/pip/*", Category: "package_manager"},
 		{Label: "uv Python package cache", Pattern: "~/.cache/uv/*", Category: "package_manager"},
+		{Label: "Poetry artifacts cache", Pattern: "~/Library/Caches/pypoetry/artifacts/*", Category: "package_manager"},
+		{Label: "Poetry package cache", Pattern: "~/Library/Caches/pypoetry/cache/*", Category: "package_manager"},
 		{Label: "R renv global cache (virtual environments)", Pattern: "~/Library/Caches/org.R-project.R/R/renv/*", Category: "package_manager"},
 		{Label: "tealdeer tldr pages cache", Pattern: "~/Library/Caches/tealdeer/tldr-pages", Category: "package_manager"},
 		{Label: "Homebrew downloaded packages", Pattern: "~/Library/Caches/Homebrew/*", Category: "package_manager"},
@@ -191,13 +203,9 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Azure CLI logs", Pattern: "~/.azure/logs/*", Category: "package_manager"},
 		{Label: "Terraform plugin/module cache", Pattern: "~/.cache/terraform/*", Category: "package_manager"},
 		{Label: "Prisma cache", Pattern: "~/.cache/prisma/*", Category: "package_manager"},
-		{Label: "PyTorch model cache", Pattern: "~/.cache/torch/*", Category: "ai_ml_cache"},
-		{Label: "TensorFlow model and dataset cache", Pattern: "~/.cache/tensorflow/*", Category: "ai_ml_cache"},
-		{Label: "HuggingFace models and datasets", Pattern: "~/.cache/huggingface/*", Category: "ai_ml_cache"},
 		{Label: "Playwright browser binaries", Pattern: "~/Library/Caches/ms-playwright*", Category: "ai_ml_cache"},
 		{Label: "Selenium WebDriver binaries", Pattern: "~/.cache/selenium/*", Category: "ai_ml_cache"},
 		{Label: "Ollama local AI models", Pattern: "~/.ollama/models/*", Category: "ai_ml_cache"},
-		{Label: "Weights & Biases ML experiments cache", Pattern: "~/.cache/wandb/*", Category: "ai_ml_cache"},
 		{Label: "Safari web browser cache", Pattern: "~/Library/Caches/com.apple.Safari/*", Category: "browser_cache"},
 		{Label: "Chrome browser cache", Pattern: "~/Library/Caches/Google/Chrome/*", Category: "browser_cache"},
 		{Label: "Firefox browser cache", Pattern: "~/Library/Caches/Firefox/*", Category: "browser_cache"},
@@ -905,9 +913,6 @@ func rustCleanRules() []cleanRule {
 	cargoHome, rustupHome := rustCleanHomes()
 	return []cleanRule{
 		{Label: "Rust Cargo registry cache", Pattern: filepath.Join(cargoHome, "registry", "cache", "*")},
-		{Label: "Rust Cargo extracted sources", Pattern: filepath.Join(cargoHome, "registry", "src", "*")},
-		{Label: "Cargo git cache", Pattern: filepath.Join(cargoHome, "git", "*")},
-		{Label: "Rust documentation cache", Pattern: filepath.Join(rustupHome, "toolchains", "*", "share", "doc", "*")},
 		{Label: "Rustup toolchain downloads", Pattern: filepath.Join(rustupHome, "downloads", "*")},
 	}
 }
@@ -978,25 +983,13 @@ func cleanRustToolCacheScope(path string) (toolHome, cacheRoot string, ok bool) 
 		root string
 	}{
 		{home: cargoHome, root: filepath.Join(cargoHome, "registry", "cache")},
-		{home: cargoHome, root: filepath.Join(cargoHome, "registry", "src")},
-		{home: cargoHome, root: filepath.Join(cargoHome, "git")},
 		{home: rustupHome, root: filepath.Join(rustupHome, "downloads")},
 	} {
 		if cleanPathAtOrBelow(path, scope.root) {
 			return scope.home, scope.root, true
 		}
 	}
-
-	toolchains := filepath.Join(rustupHome, "toolchains")
-	rel, underToolchains := cleanRelUnder(path, toolchains)
-	if !underToolchains || rel == "." {
-		return "", "", false
-	}
-	parts := strings.Split(rel, string(os.PathSeparator))
-	if len(parts) < 4 || parts[1] != "share" || parts[2] != "doc" {
-		return "", "", false
-	}
-	return rustupHome, filepath.Join(toolchains, parts[0], "share", "doc"), true
+	return "", "", false
 }
 
 func expandCleanRulePattern(pattern string) []string {
@@ -1092,7 +1085,10 @@ func normalizeCleanTargets(targets []CleanTarget) []CleanTarget {
 		isChild := false
 		for _, kept := range out {
 			if path == kept.Path || strings.HasPrefix(path, kept.Path+string(os.PathSeparator)) {
-				isChild = true
+				// A broad candidate can be protected because it contains a
+				// durable child (for example pypoetry/virtualenvs). Keep an
+				// independently named rebuildable sibling such as artifacts.
+				isChild = !shouldProtectCleanPath(kept.Path)
 				break
 			}
 		}
@@ -1433,6 +1429,9 @@ func shouldProtectCleanPath(path string) bool {
 	if isHomeConfigPath(p) {
 		return true
 	}
+	if cleanPathOverlapsDurableDeveloperState(p) {
+		return true
+	}
 	lower := strings.ToLower(p)
 	keywords := []string{
 		"systemsettings", "system settings", "systempreferences", "system preferences",
@@ -1462,6 +1461,47 @@ func shouldProtectCleanPath(path string) bool {
 		}
 	}
 	return shouldProtectCleanData(filepath.Base(p))
+}
+
+func cleanPathOverlapsDurableDeveloperState(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	cargoHome, rustupHome := rustCleanHomes()
+	denoRoot := resolvedCleanToolHome(os.Getenv("DENO_DIR"), filepath.Join(home, "Library", "Caches", "deno"))
+	for _, broad := range []string{
+		home,
+		filepath.Join(home, "Library"),
+		filepath.Join(home, "Library", "Caches"),
+		filepath.Join(home, ".cache"),
+	} {
+		if filepath.Clean(denoRoot) == filepath.Clean(broad) {
+			denoRoot = filepath.Join(home, "Library", "Caches", "deno")
+			break
+		}
+	}
+	roots := []string{
+		filepath.Join(home, ".cache", "huggingface"),
+		filepath.Join(home, ".cache", "torch"),
+		filepath.Join(home, ".cache", "tensorflow"),
+		filepath.Join(home, ".cache", "wandb"),
+		filepath.Join(home, "Library", "Caches", "pypoetry", "virtualenvs"),
+		filepath.Join(home, ".cache", "poetry", "virtualenvs"),
+		denoRoot,
+		filepath.Join(cargoHome, "registry", "src"),
+		filepath.Join(cargoHome, "registry", "index"),
+		filepath.Join(cargoHome, "git"),
+		filepath.Join(rustupHome, "toolchains"),
+	}
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if cleanPathAtOrBelow(path, root) || cleanPathAtOrBelow(root, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func isHomeConfigPath(path string) bool {

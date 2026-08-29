@@ -74,7 +74,9 @@ Homebrew casks and other `.app` bundles are handled by `bm uninstall`, which inc
 
 The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.
 
-Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets Cargo registry archives/extracted sources, Cargo git caches, Rustup downloads, and documentation caches only; registry indexes, Cargo-installed binaries, and toolchain binaries stay untouched. Active Rust builds and cache roots that escape their selected tool home are skipped.
+Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets only redundant Cargo registry archives and Rustup downloads. Registry sources and indexes, Cargo git state, installed binaries, toolchains, and toolchain documentation stay untouched; active Rust builds and cache roots that escape their selected tool home are skipped.
+
+Bloom also keeps downloaded model/data stores, Deno state, and Poetry virtual environments off the automatic clean path. Poetry's macOS `artifacts` and package-download `cache` children remain eligible independently because they are rebuildable.
 
 pnpm cleanup covers store generations under both `~/Library/pnpm/store` and the mise/XDG-style `~/.local/share/pnpm/store`. Bloom moves each generation to Trash and skips both roots while pnpm or Corepack is active; redirected roots still fail path validation.
 
