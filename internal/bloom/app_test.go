@@ -1333,6 +1333,22 @@ func TestFindRelatedPathsSkipsDotConfig(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsSkipsExactSharedDeveloperRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	for _, name := range []string{".local", ".config", ".cache"} {
+		root := filepath.Join(home, name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		paths := FindRelatedPaths(AppEntry{Path: root, Name: name, BundleID: "com.example.sharedroot"})
+		if containsString(paths, root) {
+			t.Fatalf("FindRelatedPaths included shared developer root %q: %#v", root, paths)
+		}
+	}
+}
+
 func TestUninstallAppUsesBrewCaskWithZap(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

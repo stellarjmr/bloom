@@ -73,6 +73,40 @@ func TestValidateCleanPathSafetyBoundaries(t *testing.T) {
 	}
 }
 
+func TestTrashBoundaryRejectsSharedDeveloperRootsButAllowsScopedChildren(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+
+	for _, name := range []string{".local", ".config", ".cache"} {
+		root := filepath.Join(home, name)
+		file := filepath.Join(root, "keep.txt")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := movePathToTrash(context.Background(), OSRunner{}, root); err == nil || !strings.Contains(err.Error(), "shared developer root") {
+			t.Fatalf("movePathToTrash(%q) error = %v, want shared-root rejection", root, err)
+		}
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("shared developer root %q was touched: %v", root, err)
+		}
+	}
+
+	child := filepath.Join(home, ".local", "share", "example", "cache.bin")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrashMovePath(filepath.Dir(child)); err != nil {
+		t.Fatalf("scoped child below shared root was rejected: %v", err)
+	}
+}
+
 func TestCleanWhitelistMatchesGlobParentChildAndSentinel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

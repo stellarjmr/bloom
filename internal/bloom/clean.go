@@ -1235,6 +1235,9 @@ func validateTrashMovePath(path string) error {
 		if isTrashCleanPath(candidate) {
 			return fmt.Errorf("refusing to move Trash to Trash: %s", candidate)
 		}
+		if isSharedDeveloperRoot(candidate) {
+			return fmt.Errorf("refusing to move shared developer root: %s", candidate)
+		}
 		if isBlockedSystemCleanPath(candidate) {
 			return fmt.Errorf("critical system path: %s", candidate)
 		}
@@ -1512,6 +1515,20 @@ func isHomeConfigPath(path string) bool {
 	config := filepath.Join(home, ".config")
 	path = filepath.Clean(path)
 	return path == config || strings.HasPrefix(path, config+string(os.PathSeparator))
+}
+
+func isSharedDeveloperRoot(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	path = filepath.Clean(path)
+	for _, name := range []string{".local", ".config", ".cache"} {
+		if path == filepath.Join(home, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanPathContainsProtectedComponent(path string) bool {

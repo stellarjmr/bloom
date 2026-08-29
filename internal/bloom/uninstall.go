@@ -567,7 +567,7 @@ func FindRelatedPaths(app AppEntry) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
-		if p == "" || isHomeConfigPath(p) || seen[p] {
+		if p == "" || isHomeConfigPath(p) || isSharedDeveloperRoot(p) || seen[p] {
 			continue
 		}
 		seen[p] = true

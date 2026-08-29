@@ -12,6 +12,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - Treat stale SQLite `-shm` sidecars as cleanup candidates when bounded open-file checks prove the database family is idle, while continuing to fail closed on live or inconclusive state.
 - Preserve durable developer state during cleaning, including model/data stores, Deno state, Poetry virtual environments, Cargo sources/git state, and Rust toolchain documentation; retain precise cleanup for Poetry downloads, Cargo archives, and Rustup downloads.
+- Reject the exact shared developer roots `~/.local`, `~/.config`, and `~/.cache` during uninstall discovery and again at the final Trash boundary.
 
 ## v0.6.25 - 2026-08-21
 
