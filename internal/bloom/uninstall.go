@@ -1602,6 +1602,7 @@ func urlPathEscape(p string) string {
 
 const stopAppQuitPolls = 10
 const stopAppForcePolls = 5
+const stopAppProcessProbeTimeout = 2 * time.Second
 
 var stopAppPollInterval = 100 * time.Millisecond
 
@@ -1650,25 +1651,67 @@ func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry
 }
 
 func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
-	pids := matchingAppProcessIDs(ctx, runner, app, matchName)
-	if len(pids) == 0 {
+	processes := matchingAppProcessRecords(ctx, runner, app, matchName)
+	if len(processes) == 0 {
 		return !processRunning(ctx, runner, matchName)
 	}
-	for _, pid := range pids {
-		_ = runner.Run(ctx, "/bin/kill", "-TERM", pid)
+	terminated := make([]matchedAppProcess, 0, len(processes))
+	for _, process := range processes {
+		if signalMatchedAppProcess(ctx, runner, app, matchName, process, "-TERM") {
+			terminated = append(terminated, process)
+		}
+	}
+	if len(terminated) == 0 {
+		return !processRunning(ctx, runner, matchName)
 	}
 	if waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls) {
 		return true
 	}
 
-	pids = matchingAppProcessIDs(ctx, runner, app, matchName)
-	if len(pids) == 0 {
-		return true
-	}
-	for _, pid := range pids {
-		_ = runner.Run(ctx, "/bin/kill", "-KILL", pid)
+	// Escalate only the exact processes that received TERM, and revalidate
+	// their start identity and executable again so PID reuse cannot redirect
+	// KILL to a replacement process.
+	for _, process := range terminated {
+		_ = signalMatchedAppProcess(ctx, runner, app, matchName, process, "-KILL")
 	}
 	return waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls)
+}
+
+type matchedAppProcess struct {
+	pid   string
+	start string
+}
+
+func matchingAppProcessRecords(ctx context.Context, runner Runner, app AppEntry, matchName string) []matchedAppProcess {
+	var matched []matchedAppProcess
+	for _, pid := range matchingAppProcessIDs(ctx, runner, app, matchName) {
+		startBefore := processStartIdentity(ctx, runner, pid)
+		if startBefore == "" {
+			continue
+		}
+		processPath := processExecutablePath(ctx, runner, pid)
+		startAfter := processStartIdentity(ctx, runner, pid)
+		if startAfter == "" || startBefore != startAfter ||
+			!processPathMatchesAppBundle(processPath, matchName, appBundlePathCandidates(app.Path)) {
+			continue
+		}
+		matched = append(matched, matchedAppProcess{pid: pid, start: startAfter})
+	}
+	return matched
+}
+
+func signalMatchedAppProcess(ctx context.Context, runner Runner, app AppEntry, matchName string, process matchedAppProcess, signal string) bool {
+	if process.pid == "" || process.start == "" || (signal != "-TERM" && signal != "-KILL") {
+		return false
+	}
+	if currentStart := processStartIdentity(ctx, runner, process.pid); currentStart != process.start {
+		return false
+	}
+	processPath := processExecutablePath(ctx, runner, process.pid)
+	if !processPathMatchesAppBundle(processPath, matchName, appBundlePathCandidates(app.Path)) {
+		return false
+	}
+	return runner.Run(ctx, "/bin/kill", signal, process.pid).Err == nil
 }
 
 func waitForMatchedAppProcessesExit(ctx context.Context, runner Runner, app AppEntry, matchName string, polls int) bool {
@@ -1730,8 +1773,10 @@ func appBundlePathCandidates(appPath string) []string {
 }
 
 func processExecutablePath(ctx context.Context, runner Runner, pid string) string {
-	out := runner.Run(ctx, "/bin/ps", "-ww", "-p", pid, "-o", "comm=")
-	if out.Err != nil {
+	probeCtx, cancel := context.WithTimeout(ctx, stopAppProcessProbeTimeout)
+	defer cancel()
+	out := runner.Run(probeCtx, "/bin/ps", "-ww", "-p", pid, "-o", "comm=")
+	if out.Err != nil || probeCtx.Err() != nil {
 		return ""
 	}
 	for _, line := range strings.Split(out.Stdout, "\n") {
@@ -1740,6 +1785,16 @@ func processExecutablePath(ctx context.Context, runner Runner, pid string) strin
 		}
 	}
 	return ""
+}
+
+func processStartIdentity(ctx context.Context, runner Runner, pid string) string {
+	probeCtx, cancel := context.WithTimeout(ctx, stopAppProcessProbeTimeout)
+	defer cancel()
+	out := runner.Run(probeCtx, "/bin/ps", "-ww", "-p", pid, "-o", "lstart=")
+	if out.Err != nil || probeCtx.Err() != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.Stdout)
 }
 
 func processPathMatchesAppBundle(processPath, matchName string, bundlePaths []string) bool {

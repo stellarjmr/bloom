@@ -20,6 +20,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Show localized Finder-facing app names in uninstall lists and summaries without using those labels for leftover matching, process control, cask detection, or bundle identity.
 - Avoid restarting unrelated app extensions and network tunnels after uninstall by replacing the domain-wide LaunchServices rebuild with bounded targeted unregister and garbage collection.
 - Handle `.app` suffixes case-insensitively throughout uninstall name extraction, so bundles ending in `.APP` or mixed-case variants keep correct display, matching, and cask names.
+- Revalidate an app process's start identity and bundle executable immediately before both `TERM` and `KILL`, preventing PID reuse from redirecting an uninstall signal to another process.
 
 ## v0.6.25 - 2026-08-21
 

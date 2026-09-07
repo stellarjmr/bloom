@@ -990,6 +990,77 @@ func TestStopAppEscalatesToSIGKILLWhenSIGTERMFails(t *testing.T) {
 	}
 }
 
+func TestStopAppDoesNotSignalReusedPID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	r := &processRunner{
+		pids: map[string][]string{"Foo": {"123"}},
+		processPaths: map[string]string{
+			"123": filepath.Join(appPath, "Contents", "MacOS", "Foo"),
+		},
+		processStarts: map[string][]string{
+			// The first two values bind discovery; the third simulates the PID
+			// being reused immediately before TERM.
+			"123": {"Mon Sep 7 10:00:00 2026", "Mon Sep 7 10:00:00 2026", "Mon Sep 7 10:00:01 2026"},
+		},
+	}
+
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+
+	if !stillRunning {
+		t.Fatalf("reused PID should leave a conservative still-running result: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/bin/kill -TERM 123") || runnerCallContains(r.calls, "/bin/kill -KILL 123") {
+		t.Fatalf("reused PID was signaled: %#v", r.calls)
+	}
+}
+
+func TestStopAppDoesNotEscalateReusedPIDToSIGKILL(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Foo")
+	r := &processRunner{
+		pids: map[string][]string{"Foo": {"123"}},
+		processPaths: map[string]string{
+			"123": filepath.Join(appPath, "Contents", "MacOS", "Foo"),
+		},
+		processStarts: map[string][]string{
+			// Discovery and TERM see the original process. The final value
+			// simulates PID reuse during the TERM grace period.
+			"123": {
+				"Mon Sep 7 10:00:00 2026",
+				"Mon Sep 7 10:00:00 2026",
+				"Mon Sep 7 10:00:00 2026",
+				"Mon Sep 7 10:00:01 2026",
+			},
+		},
+		ignoreTERM: map[string]bool{"123": true},
+	}
+
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+
+	if !stillRunning {
+		t.Fatalf("reused PID after TERM should remain unresolved: %#v", r.calls)
+	}
+	if !runnerCallContains(r.calls, "/bin/kill -TERM 123") {
+		t.Fatalf("original process did not receive TERM: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "/bin/kill -KILL 123") {
+		t.Fatalf("replacement process received KILL: %#v", r.calls)
+	}
+}
+
 func TestStopAppFallsBackToAppNameForQuitWhenBundleIDMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1014,12 +1085,14 @@ func TestStopAppFallsBackToAppNameForQuitWhenBundleIDMissing(t *testing.T) {
 }
 
 type processRunner struct {
-	running      map[string]bool
-	pids         map[string][]string
-	processPaths map[string]string
-	ignoreTERM   map[string]bool
-	exited       map[string]bool
-	calls        []string
+	running       map[string]bool
+	pids          map[string][]string
+	processPaths  map[string]string
+	processStarts map[string][]string
+	startCalls    map[string]int
+	ignoreTERM    map[string]bool
+	exited        map[string]bool
+	calls         []string
 }
 
 func (r *processRunner) LookPath(file string) (string, error) {
@@ -1061,6 +1134,21 @@ func (r *processRunner) Run(_ context.Context, name string, args ...string) Comm
 		}
 		if pid == "" || r.exited[pid] {
 			return CommandOutput{Err: errors.New("not running")}
+		}
+		if containsString(args, "lstart=") {
+			if r.startCalls == nil {
+				r.startCalls = map[string]int{}
+			}
+			index := r.startCalls[pid]
+			r.startCalls[pid]++
+			starts := r.processStarts[pid]
+			if len(starts) == 0 {
+				return CommandOutput{Stdout: "Mon Sep 7 10:00:00 2026\n"}
+			}
+			if index >= len(starts) {
+				index = len(starts) - 1
+			}
+			return CommandOutput{Stdout: starts[index] + "\n"}
 		}
 		if path := r.processPaths[pid]; path != "" {
 			return CommandOutput{Stdout: path + "\n"}
