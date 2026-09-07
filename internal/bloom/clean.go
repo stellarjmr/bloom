@@ -88,13 +88,10 @@ func DefaultCleanWhitelist() []string {
 		"~/.cache/torch*",
 		"~/.cache/tensorflow*",
 		"~/.cache/wandb*",
-		"~/.m2/repository/*",
 		"~/.gradle/caches/*",
 		"~/.gradle/daemon/*",
-		"~/.ollama/models/*",
 		"~/Library/Caches/com.nssurge.surge-mac/*",
 		"~/Library/Application Support/com.nssurge.surge-mac/*",
-		"~/Library/Caches/org.R-project.R/R/renv/*",
 		"~/Library/Caches/pypoetry/virtualenvs*",
 		"~/.cache/poetry/virtualenvs*",
 		"~/Library/Caches/deno*",
@@ -146,7 +143,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Xcode DerivedData (build outputs, indexes)", Pattern: "~/Library/Developer/Xcode/DerivedData/*", Category: "ide_cache"},
 		{Label: "Xcode internal cache files", Pattern: "~/Library/Caches/com.apple.dt.Xcode/*", Category: "ide_cache"},
 		{Label: "Xcode iOS device support symbols", Pattern: "~/Library/Developer/Xcode/iOS DeviceSupport/*/Symbols/System/Library/Caches/*", Category: "ide_cache"},
-		{Label: "Maven local repository (Java dependencies)", Pattern: "~/.m2/repository/*", Category: "ide_cache"},
 		{Label: "JetBrains IDEs data (IntelliJ, PyCharm, WebStorm, GoLand)", Pattern: "~/Library/Application Support/JetBrains/*", Category: "ide_cache"},
 		{Label: "JetBrains IDEs cache", Pattern: "~/Library/Caches/JetBrains/*", Category: "ide_cache"},
 		{Label: "Android Studio cache and indexes", Pattern: "~/Library/Caches/Google/AndroidStudio*/*", Category: "ide_cache"},
@@ -157,13 +153,10 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Cursor editor cache", Pattern: "~/Library/Caches/com.todesktop.230313mzl4w4u92/*", Category: "ide_cache"},
 		{Label: "Bazel build cache", Pattern: "~/.cache/bazel/*", Category: "compiler_cache"},
 		{Label: "Go build cache", Pattern: "~/Library/Caches/go-build/*", Category: "compiler_cache"},
-		{Label: "Go module cache", Pattern: "~/go/pkg/mod/*", Category: "compiler_cache"},
 		{Label: "Rust Cargo registry cache", Pattern: "~/.cargo/registry/cache/*", Category: "compiler_cache"},
 		{Label: "Rustup toolchain downloads", Pattern: "~/.rustup/downloads/*", Category: "compiler_cache"},
 		{Label: "ccache compiler cache", Pattern: "~/.ccache/*", Category: "compiler_cache"},
 		{Label: "sccache distributed compiler cache", Pattern: "~/.cache/sccache/*", Category: "compiler_cache"},
-		{Label: "SBT Scala build cache", Pattern: "~/.sbt/*", Category: "compiler_cache"},
-		{Label: "Ivy dependency cache", Pattern: "~/.ivy2/cache/*", Category: "compiler_cache"},
 		{Label: "Turbo monorepo build cache", Pattern: "~/.turbo/*", Category: "compiler_cache"},
 		{Label: "Next.js build cache", Pattern: "~/.next/*", Category: "compiler_cache"},
 		{Label: "Vite build cache", Pattern: "~/.vite/*", Category: "compiler_cache"},
@@ -185,7 +178,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "uv Python package cache", Pattern: "~/.cache/uv/*", Category: "package_manager"},
 		{Label: "Poetry artifacts cache", Pattern: "~/Library/Caches/pypoetry/artifacts/*", Category: "package_manager"},
 		{Label: "Poetry package cache", Pattern: "~/Library/Caches/pypoetry/cache/*", Category: "package_manager"},
-		{Label: "R renv global cache (virtual environments)", Pattern: "~/Library/Caches/org.R-project.R/R/renv/*", Category: "package_manager"},
 		{Label: "tealdeer tldr pages cache", Pattern: "~/Library/Caches/tealdeer/tldr-pages", Category: "package_manager"},
 		{Label: "Homebrew downloaded packages", Pattern: "~/Library/Caches/Homebrew/*", Category: "package_manager"},
 		{Label: "Yarn package manager cache", Pattern: "~/.cache/yarn/*", Category: "package_manager"},
@@ -199,10 +191,7 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Bundler cache", Pattern: "~/.bundle/cache/*", Category: "package_manager"},
 		{Label: "rbenv download cache", Pattern: "~/.rbenv/cache/*", Category: "package_manager"},
 		{Label: "Hex package cache", Pattern: "~/.hex/cache/*", Category: "package_manager"},
-		{Label: "Cabal package cache", Pattern: "~/.cabal/packages/*", Category: "package_manager"},
 		{Label: "OPAM download cache", Pattern: "~/.opam/download-cache/*", Category: "package_manager"},
-		{Label: "Conda package metadata/tarball cache", Pattern: "~/.conda/pkgs", Category: "package_manager"},
-		{Label: "Anaconda package metadata/tarball cache", Pattern: "~/anaconda3/pkgs", Category: "package_manager"},
 		{Label: "Kubernetes client cache", Pattern: "~/.kube/cache/*", Category: "package_manager"},
 		{Label: "AWS CLI cache", Pattern: "~/.aws/cli/cache/*", Category: "package_manager"},
 		{Label: "Azure CLI logs", Pattern: "~/.azure/logs/*", Category: "package_manager"},
@@ -210,7 +199,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Prisma cache", Pattern: "~/.cache/prisma/*", Category: "package_manager"},
 		{Label: "Playwright browser binaries", Pattern: "~/Library/Caches/ms-playwright*", Category: "ai_ml_cache"},
 		{Label: "Selenium WebDriver binaries", Pattern: "~/.cache/selenium/*", Category: "ai_ml_cache"},
-		{Label: "Ollama local AI models", Pattern: "~/.ollama/models/*", Category: "ai_ml_cache"},
 		{Label: "Safari web browser cache", Pattern: "~/Library/Caches/com.apple.Safari/*", Category: "browser_cache"},
 		{Label: "Chrome browser cache", Pattern: "~/Library/Caches/Google/Chrome/*", Category: "browser_cache"},
 		{Label: "Firefox browser cache", Pattern: "~/Library/Caches/Firefox/*", Category: "browser_cache"},
@@ -1567,18 +1555,10 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		return false
 	}
 	cargoHome, rustupHome := rustCleanHomes()
-	denoRoot := resolvedCleanToolHome(os.Getenv("DENO_DIR"), filepath.Join(home, "Library", "Caches", "deno"))
-	for _, broad := range []string{
-		home,
-		filepath.Join(home, "Library"),
-		filepath.Join(home, "Library", "Caches"),
-		filepath.Join(home, ".cache"),
-	} {
-		if filepath.Clean(denoRoot) == filepath.Clean(broad) {
-			denoRoot = filepath.Join(home, "Library", "Caches", "deno")
-			break
-		}
-	}
+	denoRoot := resolvedDurableCleanRoot(os.Getenv("DENO_DIR"), filepath.Join(home, "Library", "Caches", "deno"), home)
+	goModRoot := resolvedDurableCleanRoot(os.Getenv("GOMODCACHE"), filepath.Join(home, "go", "pkg", "mod"), home)
+	renvRoot := resolvedDurableCleanRoot(os.Getenv("RENV_PATHS_CACHE"), filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv"), home)
+	ollamaRoot := resolvedDurableCleanRoot(os.Getenv("OLLAMA_MODELS"), filepath.Join(home, ".ollama", "models"), home)
 	roots := []string{
 		filepath.Join(home, ".cache", "huggingface"),
 		filepath.Join(home, ".cache", "torch"),
@@ -1587,6 +1567,21 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		filepath.Join(home, "Library", "Caches", "pypoetry", "virtualenvs"),
 		filepath.Join(home, ".cache", "poetry", "virtualenvs"),
 		denoRoot,
+		filepath.Join(home, ".m2", "repository"),
+		filepath.Join(home, "go", "pkg", "mod"),
+		goModRoot,
+		filepath.Join(home, ".sbt"),
+		filepath.Join(home, ".ivy2", "cache"),
+		filepath.Join(home, ".cabal", "packages"),
+		filepath.Join(home, ".conda", "pkgs"),
+		filepath.Join(home, "anaconda3", "pkgs"),
+		filepath.Join(home, "miniconda3", "pkgs"),
+		filepath.Join(home, "miniforge3", "pkgs"),
+		filepath.Join(home, "mambaforge", "pkgs"),
+		filepath.Join(home, ".ollama", "models"),
+		ollamaRoot,
+		filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv"),
+		renvRoot,
 		filepath.Join(cargoHome, "registry", "src"),
 		filepath.Join(cargoHome, "registry", "index"),
 		filepath.Join(cargoHome, "git"),
@@ -1600,6 +1595,21 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		}
 	}
 	return false
+}
+
+func resolvedDurableCleanRoot(value, fallback, home string) string {
+	root := resolvedCleanToolHome(value, fallback)
+	for _, broad := range []string{
+		home,
+		filepath.Join(home, "Library"),
+		filepath.Join(home, "Library", "Caches"),
+		filepath.Join(home, ".cache"),
+	} {
+		if filepath.Clean(root) == filepath.Clean(broad) {
+			return filepath.Clean(fallback)
+		}
+	}
+	return root
 }
 
 func isHomeConfigPath(path string) bool {

@@ -780,6 +780,15 @@ func TestRunCleanAllowsContainedCacheBelowSymlinkedCargoHome(t *testing.T) {
 func TestCleanWhitelistInventoryExcludesDurableDeveloperState(t *testing.T) {
 	items := CleanWhitelistItems()
 	for _, unwanted := range []string{
+		"~/.m2/repository/*",
+		"~/go/pkg/mod/*",
+		"~/.sbt/*",
+		"~/.ivy2/cache/*",
+		"~/.cabal/packages/*",
+		"~/.conda/pkgs",
+		"~/anaconda3/pkgs",
+		"~/.ollama/models/*",
+		"~/Library/Caches/org.R-project.R/R/renv/*",
 		"~/.cargo/registry/src/*",
 		"~/.cargo/git/*",
 		"~/.rustup/toolchains/*/share/doc/*",
@@ -799,14 +808,19 @@ func TestCleanWhitelistInventoryExcludesDurableDeveloperState(t *testing.T) {
 		if found {
 			t.Errorf("clean whitelist inventory still offers durable state %q", unwanted)
 		}
+		if containsString(DefaultCleanWhitelist(), unwanted) {
+			t.Errorf("default clean whitelist still contains obsolete durable-state entry %q", unwanted)
+		}
 	}
 }
 
-func TestRunCleanPreservesDurableDeveloperStateAndTargetsPrecisePoetryCaches(t *testing.T) {
+func TestRunCleanPreservesDurableDeveloperStateAndTargetsPreciseRebuildableCaches(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CARGO_HOME", filepath.Join(home, "cargo"))
 	t.Setenv("RUSTUP_HOME", filepath.Join(home, "rustup"))
+	goModRoot := filepath.Join(home, "Library", "Caches", "go-modules")
+	t.Setenv("GOMODCACHE", goModRoot)
 
 	durable := []string{
 		filepath.Join(home, ".cache", "huggingface", "hub", "model.bin"),
@@ -815,11 +829,25 @@ func TestRunCleanPreservesDurableDeveloperStateAndTargetsPrecisePoetryCaches(t *
 		filepath.Join(home, ".cache", "wandb", "run-state.bin"),
 		filepath.Join(home, "Library", "Caches", "deno", "deps", "module.ts"),
 		filepath.Join(home, "Library", "Caches", "pypoetry", "virtualenvs", "project", "bin", "python"),
+		filepath.Join(home, ".m2", "repository", "org", "example", "artifact.pom"),
+		filepath.Join(home, "go", "pkg", "mod", "example.com", "module.go"),
+		filepath.Join(goModRoot, "example.com", "relocated.go"),
+		filepath.Join(home, ".sbt", "1.0", "plugins", "build.properties"),
+		filepath.Join(home, ".ivy2", "cache", "org.example", "artifact.jar"),
+		filepath.Join(home, ".cabal", "packages", "hackage.haskell.org", "01-index.tar"),
+		filepath.Join(home, ".conda", "pkgs", "python-3.12", "info", "index.json"),
+		filepath.Join(home, "anaconda3", "pkgs", "numpy.tar.bz2"),
+		filepath.Join(home, "miniconda3", "pkgs", "openssl.tar.bz2"),
+		filepath.Join(home, "miniforge3", "pkgs", "zlib.tar.bz2"),
+		filepath.Join(home, "mambaforge", "pkgs", "sqlite.tar.bz2"),
+		filepath.Join(home, ".ollama", "models", "blobs", "sha256-model"),
+		filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv", "library", "package", "DESCRIPTION"),
 		filepath.Join(home, "cargo", "registry", "src", "index", "crate", "lib.rs"),
 		filepath.Join(home, "cargo", "git", "checkouts", "repo", "HEAD"),
 		filepath.Join(home, "rustup", "toolchains", "stable", "share", "doc", "book", "index.html"),
 	}
 	rebuildable := []string{
+		filepath.Join(home, "Library", "Caches", "go-build", "ab", "object.a"),
 		filepath.Join(home, "Library", "Caches", "pypoetry", "artifacts", "wheel.whl"),
 		filepath.Join(home, "Library", "Caches", "pypoetry", "cache", "repository", "package.whl"),
 		filepath.Join(home, "cargo", "registry", "cache", "index", "crate.crate"),
@@ -842,6 +870,9 @@ func TestRunCleanPreservesDurableDeveloperStateAndTargetsPrecisePoetryCaches(t *
 		Runner: &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}},
 	})
 	for _, path := range durable {
+		if !shouldProtectCleanPath(path) {
+			t.Errorf("durable developer state lacks hard protection: %q", path)
+		}
 		if cleanResultCovers(res, path) {
 			t.Errorf("durable developer state appeared in targets: %q (targets=%#v)", path, res.Targets)
 		}
