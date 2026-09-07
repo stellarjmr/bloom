@@ -10,15 +10,25 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.26 - 2026-09-07
+
+### Added
+
+- Reclaim verified older Autodesk Fusion webdeploy bundles while retaining current, equal, newer, malformed, redirected, active, open, or changed versions and moving every eligible version to Trash.
+
+### Changed
+
+- Show localized Finder-facing app names in uninstall lists and summaries without using those labels for leftover matching, process control, cask detection, or bundle identity.
+
+### Fixed
+
 - Treat stale SQLite `-shm` sidecars as cleanup candidates when bounded open-file checks prove the database family is idle, while continuing to fail closed on live or inconclusive state.
 - Preserve durable developer state during cleaning, including model/data stores, Deno state, Poetry virtual environments, Cargo sources/git state, and Rust toolchain documentation; retain precise cleanup for Poetry downloads, Cargo archives, and Rustup downloads.
 - Keep complete Maven, Go module, SBT/Ivy, Cabal, Conda, Ollama, and R renv stores off the automatic clean path instead of treating dependency, toolchain, model, or environment roots as disposable caches.
 - Reject the exact shared developer roots `~/.local`, `~/.config`, and `~/.cache` during uninstall discovery and again at the final Trash boundary.
-- Reclaim verified older Autodesk Fusion webdeploy bundles while retaining current, equal, newer, malformed, redirected, active, open, or changed versions and moving every eligible version to Trash.
 - Stop the remaining clean run when a process or SQLite/open-file safety probe times out or is interrupted, reporting the current target as failed instead of continuing with partial evidence.
 - Require complete `lsof` visibility before an idle result can authorize cleanup, treat successful status as positive open-file evidence, and recheck incomplete downloads after sizing and at the Trash boundary.
 - Disable ANSI styling automatically when output is redirected or `TERM=dumb`, while continuing to honor `NO_COLOR` in both the shell front controller and Go progress output.
-- Show localized Finder-facing app names in uninstall lists and summaries without using those labels for leftover matching, process control, cask detection, or bundle identity.
 - Avoid restarting unrelated app extensions and network tunnels after uninstall by replacing the domain-wide LaunchServices rebuild with bounded targeted unregister and garbage collection.
 - Handle `.app` suffixes case-insensitively throughout uninstall name extraction, so bundles ending in `.APP` or mixed-case variants keep correct display, matching, and cask names.
 - Revalidate an app process's start identity and bundle executable immediately before both `TERM` and `KILL`, preventing PID reuse from redirecting an uninstall signal to another process.
