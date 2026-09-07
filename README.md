@@ -82,6 +82,8 @@ pnpm cleanup covers store generations under both `~/Library/pnpm/store` and the 
 
 Codex cleanup is limited to exact abandoned staging locations: Sparkle update entries and marketplace directories with the `openai-bundled.staging-`, `marketplace-upgrade-`, or `marketplace-add-` prefixes. Bloom keeps newer pending desktop updates, completed marketplaces, backups, sessions, credentials, and configuration. Unknown versions fall back to a 30-day age gate, and any active Codex/Sparkle process, open staging file, path redirection, or changed identity stops the Trash move.
 
+Autodesk Fusion cleanup considers only direct 40-character version directories under its standard `webdeploy/production` root. Bloom resolves and rebinds Fusion's current alias, validates the bundle ID, numeric build version, and executable, and moves only strictly older versions to Trash. Equal, newer, malformed, redirected, active, open, or changed bundles stay in place.
+
 ## Uninstall
 
 `bm uninstall` removes a macOS `.app` bundle plus the leftovers most apps drop into `~/Library` (Application Support, Caches, Containers, Group Containers, HTTPStorages, WebKit, Logs, Saved Application State, Application Scripts, Preferences, ByHost preferences, LaunchAgents, and Cookies). It also scans the app for embedded helper bundles (XPC services, app extensions, and login-item helpers) and cleans their leftovers by exact bundle ID, while skipping protected identifiers so removal stays scoped to the app's own data. The exact shared developer roots `~/.local`, `~/.config`, and `~/.cache` are rejected both during discovery and at the final Trash boundary.

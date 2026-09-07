@@ -18,6 +18,7 @@ type cleanSpecialKind uint8
 const (
 	cleanSpecialCodexSparkle cleanSpecialKind = iota + 1
 	cleanSpecialCodexMarketplace
+	cleanSpecialAutodeskFusion
 )
 
 const (
@@ -26,10 +27,13 @@ const (
 )
 
 type cleanSpecialTarget struct {
-	kind           cleanSpecialKind
-	root           string
-	eligibility    string
-	installedBuild int64
+	kind             cleanSpecialKind
+	root             string
+	eligibility      string
+	installedBuild   int64
+	currentDir       string
+	currentVersion   string
+	candidateVersion string
 }
 
 func discoverCodexStagingTargets(ctx context.Context, runner Runner, now time.Time) []CleanTarget {
@@ -47,7 +51,7 @@ func discoverCodexSparkleTargets(ctx context.Context, runner Runner, now time.Ti
 		return nil
 	}
 	root := filepath.Join(home, "Library", "Caches", "com.openai.codex", "org.sparkle-project.Sparkle", "Installation")
-	if !cleanCodexStagingPathSafe(root, root) {
+	if !cleanDirectChildPathSafe(root, root) {
 		return nil
 	}
 	installedBuild, installedKnown := cleanCodexInstalledBuild(ctx, runner)
@@ -64,7 +68,7 @@ func discoverCodexSparkleTargets(ctx context.Context, runner Runner, now time.Ti
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		if !cleanCodexStagingPathSafe(path, root) || !cleanDirectoryHasEntries(path) {
+		if !cleanDirectChildPathSafe(path, root) || !cleanDirectoryHasEntries(path) {
 			continue
 		}
 		mode, eligible := cleanCodexSparkleEligibility(ctx, runner, path, installedBuild, installedKnown, now)
@@ -106,7 +110,7 @@ func discoverCodexMarketplaceTargets(now time.Time) []CleanTarget {
 	}
 	var targets []CleanTarget
 	for _, root := range roots {
-		if !cleanCodexStagingPathSafe(root.path, root.path) {
+		if !cleanDirectChildPathSafe(root.path, root.path) {
 			continue
 		}
 		entries, err := os.ReadDir(root.path)
@@ -118,7 +122,7 @@ func discoverCodexMarketplaceTargets(now time.Time) []CleanTarget {
 				continue
 			}
 			path := filepath.Join(root.path, entry.Name())
-			if !cleanCodexStagingPathSafe(path, root.path) || !cleanDirectoryHasEntries(path) || !cleanCodexOlderThan(path, now) {
+			if !cleanDirectChildPathSafe(path, root.path) || !cleanDirectoryHasEntries(path) || !cleanCodexOlderThan(path, now) {
 				continue
 			}
 			targets = append(targets, CleanTarget{
@@ -223,11 +227,11 @@ func cleanCodexAppBuild(ctx context.Context, runner Runner, appPath string) (int
 		return 0, false
 	}
 	plist := filepath.Join(appPath, "Contents", "Info.plist")
-	bundleID, ok := cleanCodexPlistValue(ctx, runner, plist, "CFBundleIdentifier")
+	bundleID, ok := cleanPlistValue(ctx, runner, plist, "CFBundleIdentifier")
 	if !ok || bundleID != "com.openai.codex" {
 		return 0, false
 	}
-	version, ok := cleanCodexPlistValue(ctx, runner, plist, "CFBundleVersion")
+	version, ok := cleanPlistValue(ctx, runner, plist, "CFBundleVersion")
 	if !ok || len(version) == 0 || len(version) > 10 {
 		return 0, false
 	}
@@ -240,7 +244,7 @@ func cleanCodexAppBuild(ctx context.Context, runner Runner, appPath string) (int
 	return build, err == nil
 }
 
-func cleanCodexPlistValue(ctx context.Context, runner Runner, plist, key string) (string, bool) {
+func cleanPlistValue(ctx context.Context, runner Runner, plist, key string) (string, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	out := runner.Run(probeCtx, "/usr/libexec/PlistBuddy", "-c", "Print :"+key, plist)
 	probeErr := probeCtx.Err()
@@ -283,7 +287,14 @@ func cleanTargetActivityReason(ctx context.Context, activity *cleanActivityProbe
 	if !activity.loaded {
 		activity.refresh(ctx)
 	}
-	return cleanCodexStagingActivityReason(ctx, activity, target)
+	switch target.special.kind {
+	case cleanSpecialCodexSparkle, cleanSpecialCodexMarketplace:
+		return cleanCodexStagingActivityReason(ctx, activity, target)
+	case cleanSpecialAutodeskFusion:
+		return cleanAutodeskFusionActivityReason(ctx, activity, target)
+	default:
+		return "cleanup target type unknown"
+	}
 }
 
 func cleanCodexStagingActivityReason(ctx context.Context, activity *cleanActivityProbe, target CleanTarget) string {
@@ -307,7 +318,7 @@ func cleanCodexStagingActivityReason(ctx context.Context, activity *cleanActivit
 
 func cleanCodexStagingEligibilityReason(ctx context.Context, runner Runner, target CleanTarget, now time.Time) string {
 	meta := target.special
-	if meta == nil || !cleanCodexSpecialPathMatches(target.Path, meta) || !cleanCodexStagingPathSafe(target.Path, meta.root) || !cleanDirectoryHasEntries(target.Path) {
+	if meta == nil || !cleanCodexSpecialPathMatches(target.Path, meta) || !cleanDirectChildPathSafe(target.Path, meta.root) || !cleanDirectoryHasEntries(target.Path) {
 		return "Codex staging entry changed"
 	}
 	switch meta.kind {
@@ -394,11 +405,14 @@ func validateCleanTargetPath(target CleanTarget) error {
 	if target.special == nil {
 		return validateCleanPath(target.Path)
 	}
+	if target.special.kind == cleanSpecialAutodeskFusion {
+		return validateAutodeskFusionTargetPath(target)
+	}
 	path := target.Path
 	if path == "" || !filepath.IsAbs(path) || hasDotDotComponent(path) || hasControlChar(path) {
 		return errors.New("invalid Codex staging path")
 	}
-	if !cleanCodexSpecialPathMatches(path, target.special) || !cleanCodexStagingPathSafe(path, target.special.root) {
+	if !cleanCodexSpecialPathMatches(path, target.special) || !cleanDirectChildPathSafe(path, target.special.root) {
 		return errors.New("unsafe Codex staging path")
 	}
 	if isTrashCleanPath(path) {
@@ -418,7 +432,16 @@ func moveCleanTargetToTrash(ctx context.Context, runner Runner, target CleanTarg
 	}
 	activity := &cleanActivityProbe{runner: runner}
 	activity.refresh(ctx)
-	if reason := cleanCodexStagingActivityReason(ctx, activity, target); reason != "" {
+	var reason string
+	switch target.special.kind {
+	case cleanSpecialCodexSparkle, cleanSpecialCodexMarketplace:
+		reason = cleanCodexStagingActivityReason(ctx, activity, target)
+	case cleanSpecialAutodeskFusion:
+		reason = cleanAutodeskFusionActivityReason(ctx, activity, target)
+	default:
+		reason = "cleanup target type unknown"
+	}
+	if reason != "" {
 		return errors.New(reason)
 	}
 	if err := validateCleanTargetPath(target); err != nil {
@@ -449,7 +472,7 @@ func cleanCodexSpecialPathMatches(path string, meta *cleanSpecialTarget) bool {
 	}
 }
 
-func cleanCodexStagingPathSafe(candidate, root string) bool {
+func cleanDirectChildPathSafe(candidate, root string) bool {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" || hasControlChar(candidate) || hasDotDotComponent(candidate) {
 		return false

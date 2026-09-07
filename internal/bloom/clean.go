@@ -344,6 +344,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 	activity := &cleanActivityProbe{runner: runner}
 	candidates := discoverCleanCandidates(whitelist)
 	candidates = append(candidates, discoverCodexStagingTargets(ctx, runner, time.Now())...)
+	candidates = append(candidates, discoverAutodeskFusionTargets(ctx, runner)...)
 	pending := make([]CleanTarget, 0, len(candidates))
 	for _, target := range candidates {
 		if ctx.Err() != nil {

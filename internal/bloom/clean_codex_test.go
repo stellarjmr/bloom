@@ -405,7 +405,7 @@ func TestCodexStagingPathGateRejectsSymlinkComponents(t *testing.T) {
 		t.Skipf("cannot create symlink fixture: %v", err)
 	}
 	root := filepath.Join(home, ".codex", ".tmp", "bundled-marketplaces")
-	if cleanCodexStagingPathSafe(root, root) {
+	if cleanDirectChildPathSafe(root, root) {
 		t.Fatal("Codex staging root with a symlink component was accepted")
 	}
 }
