@@ -12,8 +12,11 @@ type cleanProbeRunner struct {
 	processTables []string
 	psCalls       int
 	onPS          func(call int)
+	psOutput      *CommandOutput
 	lsofAvailable bool
 	lsofOutput    CommandOutput
+	lsofOutputs   []CommandOutput
+	lsofCalls     int
 }
 
 func (r *cleanProbeRunner) LookPath(file string) (string, error) {
@@ -26,6 +29,9 @@ func (r *cleanProbeRunner) LookPath(file string) (string, error) {
 func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
 	switch name {
 	case "ps":
+		if r.psOutput != nil {
+			return *r.psOutput
+		}
 		index := r.psCalls
 		r.psCalls++
 		if r.onPS != nil {
@@ -39,6 +45,14 @@ func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string)
 		}
 		return CommandOutput{Stdout: r.processTables[index]}
 	case "lsof":
+		if len(r.lsofOutputs) > 0 {
+			index := r.lsofCalls
+			r.lsofCalls++
+			if index >= len(r.lsofOutputs) {
+				index = len(r.lsofOutputs) - 1
+			}
+			return r.lsofOutputs[index]
+		}
 		return r.lsofOutput
 	default:
 		return OSRunner{}.Run(ctx, name, args...)
@@ -950,6 +964,120 @@ func TestRunCleanSkipsSQLiteCacheWithOpenHandle(t *testing.T) {
 	}
 }
 
+func TestRunCleanStopsAfterSQLiteSafetyProbeTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	first := filepath.Join(home, "Library", "Caches", "AAA")
+	later := filepath.Join(home, "Library", "Caches", "ZZZ")
+	for _, path := range []string{
+		filepath.Join(first, "Cache.db"),
+		filepath.Join(later, "cache.bin"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+		lsofOutput:    CommandOutput{Err: context.DeadlineExceeded},
+	}
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if !cleanResultFailedFor(res, first, "SQLite open-file check timed out") {
+		t.Fatalf("SQLite timeout failure missing: %#v", res.Failed)
+	}
+	if len(res.Targets) != 0 {
+		t.Fatalf("cleanup continued after SQLite timeout: %#v", res.Targets)
+	}
+	for _, path := range []string{first, later} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("cache %q was touched after safety timeout: %v", path, err)
+		}
+	}
+}
+
+func TestRunCleanStopsPendingTrashMovesAfterSafetyProbeTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	first := filepath.Join(home, "Library", "Caches", "AAA")
+	later := filepath.Join(home, "Library", "Caches", "ZZZ")
+	for _, path := range []string{
+		filepath.Join(first, "Cache.db"),
+		filepath.Join(later, "cache.bin"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+		lsofOutputs: []CommandOutput{
+			{},
+			{},
+			{Err: context.DeadlineExceeded},
+		},
+	}
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if runner.lsofCalls != 3 {
+		t.Fatalf("lsof calls = %d, want action-boundary timeout on third probe", runner.lsofCalls)
+	}
+	if !cleanResultFailedFor(res, first, "SQLite open-file check timed out") {
+		t.Fatalf("action-boundary timeout failure missing: %#v", res.Failed)
+	}
+	if len(res.Targets) != 0 {
+		t.Fatalf("a pending target moved after safety timeout: %#v", res.Targets)
+	}
+	for _, path := range []string{first, later} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("pending cache %q was touched after safety timeout: %v", path, err)
+		}
+	}
+}
+
+func TestRunCleanStopsAfterProcessSafetyProbeTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	first := filepath.Join(home, "Library", "Caches", "AAA")
+	later := filepath.Join(home, "Library", "Caches", "ZZZ")
+	for _, path := range []string{filepath.Join(first, "cache.bin"), filepath.Join(later, "cache.bin")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	timeout := CommandOutput{Err: context.DeadlineExceeded}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{
+		DryRun: true,
+		Config: cfg,
+		Runner: &cleanProbeRunner{psOutput: &timeout},
+	})
+	if !cleanResultFailedFor(res, first, "cache owner process check timed out") {
+		t.Fatalf("process timeout failure missing: %#v", res.Failed)
+	}
+	if len(res.Targets) != 0 {
+		t.Fatalf("cleanup continued after process timeout: %#v", res.Targets)
+	}
+}
+
 func TestRunCleanRechecksActivityAtTrashBoundary(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1118,6 +1246,16 @@ func cleanResultSkippedFor(res CleanResult, path, reason string) bool {
 	path = filepath.Clean(path)
 	for _, skipped := range res.Skipped {
 		if filepath.Clean(skipped.Path) == path && skipped.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanResultFailedFor(res CleanResult, path, reason string) bool {
+	path = filepath.Clean(path)
+	for _, failed := range res.Failed {
+		if filepath.Clean(failed.Path) == path && failed.Reason == reason {
 			return true
 		}
 	}

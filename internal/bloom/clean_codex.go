@@ -302,6 +302,9 @@ func cleanCodexStagingActivityReason(ctx context.Context, activity *cleanActivit
 		return reason
 	}
 	if !activity.processKnown {
+		if activity.processStop != "" {
+			return "Codex " + activity.processStop
+		}
 		return "Codex process state unknown"
 	}
 	if cleanCodexRuntimeActive(activity.processTable, target.special.kind) {
@@ -386,8 +389,8 @@ func cleanCodexOpenFileReason(ctx context.Context, runner Runner, root string) s
 	out := runner.Run(probeCtx, "lsof", "-Fn", "+D", root)
 	probeErr := probeCtx.Err()
 	cancel()
-	if probeErr != nil {
-		return "Codex staging open-file check timed out"
+	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		return "Codex staging open-file " + cleanProbeStopReason(ctx, "check")
 	}
 	if out.Err == nil {
 		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {

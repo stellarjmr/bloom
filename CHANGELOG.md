@@ -14,6 +14,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Preserve durable developer state during cleaning, including model/data stores, Deno state, Poetry virtual environments, Cargo sources/git state, and Rust toolchain documentation; retain precise cleanup for Poetry downloads, Cargo archives, and Rustup downloads.
 - Reject the exact shared developer roots `~/.local`, `~/.config`, and `~/.cache` during uninstall discovery and again at the final Trash boundary.
 - Reclaim verified older Autodesk Fusion webdeploy bundles while retaining current, equal, newer, malformed, redirected, active, open, or changed versions and moving every eligible version to Trash.
+- Stop the remaining clean run when a process or SQLite/open-file safety probe times out or is interrupted, reporting the current target as failed instead of continuing with partial evidence.
 
 ## v0.6.25 - 2026-08-21
 

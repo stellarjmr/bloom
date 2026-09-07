@@ -73,6 +73,7 @@ type cleanActivityProbe struct {
 	runner       Runner
 	processTable string
 	processKnown bool
+	processStop  string
 	loaded       bool
 }
 
@@ -373,6 +374,10 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			continue
 		}
 		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
+			if cleanSafetyProbeStopsRun(reason) {
+				res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: reason})
+				return res
+			}
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -388,6 +393,10 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		// Refresh before even promising the target in a dry-run result.
 		activity.refresh(ctx)
 		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
+			if cleanSafetyProbeStopsRun(reason) {
+				res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: reason})
+				return res
+			}
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -417,6 +426,10 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		// moves may take long enough for a later cache owner to start.
 		activity.refresh(ctx)
 		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
+			if cleanSafetyProbeStopsRun(reason) {
+				res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: reason})
+				return res
+			}
 			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: reason})
 			continue
 		}
@@ -427,6 +440,9 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 		if err := moveCleanTargetToTrash(ctx, runner, target); err != nil {
 			res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: err.Error()})
 			logCleanOperation("trash", cleanLogSize(target.SizeKB), "error", target.Path)
+			if cleanSafetyProbeStopsRun(err.Error()) {
+				return res
+			}
 			continue
 		}
 		res.Targets = append(res.Targets, target)
@@ -439,7 +455,7 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 
 func (p *cleanActivityProbe) refresh(ctx context.Context) {
 	p.loaded = true
-	p.processTable, p.processKnown = cleanProcessTable(ctx, p.runner)
+	p.processTable, p.processKnown, p.processStop = cleanProcessTable(ctx, p.runner)
 }
 
 func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string {
@@ -454,6 +470,9 @@ func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string
 	}
 	if family, programs := cleanProcessGuardForPath(path); family != "" {
 		if !p.processKnown {
+			if p.processStop != "" {
+				return family + " " + p.processStop
+			}
 			return family + " process state unknown"
 		}
 		if cleanProcessTableMentionsAny(p.processTable, programs) {
@@ -462,6 +481,9 @@ func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string
 	}
 	if owner := cleanReverseDNSCacheOwner(path); owner != "" {
 		if !p.processKnown {
+			if p.processStop != "" {
+				return "cache owner " + p.processStop
+			}
 			return "cache owner state unknown"
 		}
 		if cleanProcessTableMatchesOwner(p.processTable, owner) {
@@ -470,6 +492,9 @@ func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string
 	}
 	if programs := cleanNamedCacheOwnerPrograms(path); len(programs) > 0 {
 		if !p.processKnown {
+			if p.processStop != "" {
+				return "cache owner " + p.processStop
+			}
 			return "cache owner state unknown"
 		}
 		if cleanProcessTableMentionsAny(p.processTable, programs) {
@@ -479,17 +504,33 @@ func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string
 	return ""
 }
 
-func cleanProcessTable(ctx context.Context, runner Runner) (string, bool) {
+func cleanProcessTable(ctx context.Context, runner Runner) (string, bool, string) {
 	if _, err := runner.LookPath("ps"); err != nil {
-		return "", false
+		return "", false, ""
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
 	out := runner.Run(probeCtx, "ps", "-axo", "command=")
-	if out.Err != nil || probeCtx.Err() != nil || strings.TrimSpace(out.Stdout) == "" {
-		return "", false
+	probeErr := probeCtx.Err()
+	cancel()
+	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		return "", false, cleanProbeStopReason(ctx, "process check")
 	}
-	return out.Stdout, true
+	if out.Err != nil || strings.TrimSpace(out.Stdout) == "" {
+		return "", false, ""
+	}
+	return out.Stdout, true, ""
+}
+
+func cleanProbeStopReason(ctx context.Context, label string) string {
+	if ctx.Err() != nil {
+		return label + " interrupted"
+	}
+	return label + " timed out"
+}
+
+func cleanSafetyProbeStopsRun(reason string) bool {
+	reason = strings.ToLower(reason)
+	return strings.Contains(reason, " check timed out") || strings.Contains(reason, " check interrupted")
 }
 
 func cleanReverseDNSCacheOwner(path string) string {
@@ -736,7 +777,10 @@ func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) 
 	defer cancel()
 	out := runner.Run(probeCtx, "lsof", args...)
 	if probeCtx.Err() != nil {
-		return "SQLite open-file check timed out"
+		return "SQLite open-file " + cleanProbeStopReason(ctx, "check")
+	}
+	if errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		return "SQLite open-file " + cleanProbeStopReason(ctx, "check")
 	}
 	if out.Err == nil {
 		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {

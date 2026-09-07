@@ -288,6 +288,9 @@ func cleanAutodeskFusionActivityReason(ctx context.Context, activity *cleanActiv
 		return reason
 	}
 	if !activity.processKnown {
+		if activity.processStop != "" {
+			return "Autodesk Fusion " + activity.processStop
+		}
 		return "Autodesk Fusion process state unknown"
 	}
 	if cleanAutodeskFusionRuntimeActive(activity.processTable) {
@@ -299,6 +302,9 @@ func cleanAutodeskFusionActivityReason(ctx context.Context, activity *cleanActiv
 
 	activity.refresh(ctx)
 	if !activity.processKnown {
+		if activity.processStop != "" {
+			return "Autodesk Fusion " + activity.processStop
+		}
 		return "Autodesk Fusion process state unknown"
 	}
 	if cleanAutodeskFusionRuntimeActive(activity.processTable) {
@@ -358,8 +364,8 @@ func cleanAutodeskFusionOpenFileReason(ctx context.Context, runner Runner, targe
 	out := runner.Run(probeCtx, "lsof", "-Fn", "+D", target)
 	probeErr := probeCtx.Err()
 	cancel()
-	if probeErr != nil {
-		return "Autodesk Fusion open-file check timed out"
+	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		return "Autodesk Fusion open-file " + cleanProbeStopReason(ctx, "check")
 	}
 	if out.Err == nil {
 		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {
