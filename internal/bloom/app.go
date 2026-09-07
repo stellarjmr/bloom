@@ -813,6 +813,7 @@ func (a *App) runUninstall(args []string) int {
 
 	failures := 0
 	runner := newCachedRunner(a.Runner)
+	preferredLanguages := readPreferredAppleLanguages(ctx)
 
 	targets := make([]AppEntry, 0, len(values))
 	for _, path := range values {
@@ -825,6 +826,7 @@ func (a *App) runUninstall(args []string) int {
 				BundleID: readBundleID(path),
 				SizeKB:   sizeKB,
 			}
+			entry.DisplayName = readAppDisplayName(ctx, path, preferredLanguages)
 		}
 		if _, err := os.Stat(entry.Path); err != nil {
 			fmt.Fprintf(a.Err, "✗ %s: not found\n", entry.Path)
@@ -886,8 +888,9 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 	processed := 0
 	failures := 0
 	for _, res := range summary.Results {
+		appName := res.App.displayName()
 		if res.Err != nil {
-			fmt.Fprintf(a.Err, "✗ %s: %v\n", res.App.Name, res.Err)
+			fmt.Fprintf(a.Err, "✗ %s: %v\n", appName, res.Err)
 			failures++
 			continue
 		}
@@ -899,7 +902,7 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 		if res.BrewRemoved || res.BrewCask != "" {
 			brewNote = "  [brew cask]"
 		}
-		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, res.App.Name, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
+		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, appName, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
 		if command := brewCaskZapCommand(res.BrewCask); command != "" {
 			verb := "ran"
 			if dryRun {
@@ -925,7 +928,7 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 			}
 		}
 		if res.StillRunning {
-			fmt.Fprintf(a.Err, "   ! %s may still be running; quit it manually if needed\n", res.App.Name)
+			fmt.Fprintf(a.Err, "   ! %s may still be running; quit it manually if needed\n", appName)
 		}
 		for _, p := range res.Failed {
 			fmt.Fprintf(a.Err, "   ! could not move to Trash %s\n", p)

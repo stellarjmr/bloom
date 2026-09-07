@@ -26,10 +26,13 @@ import (
 
 // AppEntry describes a discovered macOS .app bundle.
 type AppEntry struct {
-	Path     string
-	Name     string // basename without .app
-	BundleID string
-	SizeKB   int64
+	Path string
+	Name string // bundle basename without .app; used for identity and leftover matching
+	// DisplayName is a sanitized, potentially localized UI label. It must not
+	// participate in leftover matching, cask detection, or process identity.
+	DisplayName string
+	BundleID    string
+	SizeKB      int64
 	// LastUsedEpoch is seconds since the Unix epoch for the bundle's
 	// kMDItemLastUsedDate metadata, or 0 when unknown.
 	LastUsedEpoch int64
@@ -89,6 +92,7 @@ var officialUninstallerRules = []officialUninstallerRule{
 // returns every .app bundle that is not a system-protected component.
 func ScanApplications(ctx context.Context) ([]AppEntry, error) {
 	home, _ := os.UserHomeDir()
+	preferredLanguages := readPreferredAppleLanguages(ctx)
 	seen := map[string]bool{}
 	var apps []AppEntry
 
@@ -101,17 +105,22 @@ func ScanApplications(ctx context.Context) ([]AppEntry, error) {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		walkAppDir(ctx, root, seen, &apps)
+		walkAppDir(ctx, root, preferredLanguages, seen, &apps)
 	}
 
 	apps = dedupeAppEntriesByBundleID(apps, home)
 	sort.Slice(apps, func(i, j int) bool {
-		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+		left := strings.ToLower(apps[i].displayName())
+		right := strings.ToLower(apps[j].displayName())
+		if left == right {
+			return apps[i].Path < apps[j].Path
+		}
+		return left < right
 	})
 	return apps, nil
 }
 
-func walkAppDir(ctx context.Context, root string, seen map[string]bool, out *[]AppEntry) {
+func walkAppDir(ctx context.Context, root string, preferredLanguages []string, seen map[string]bool, out *[]AppEntry) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
@@ -135,16 +144,16 @@ func walkAppDir(ctx context.Context, root string, seen map[string]bool, out *[]A
 					if !strings.HasSuffix(strings.ToLower(child.Name()), ".app") {
 						continue
 					}
-					addAppEntry(ctx, filepath.Join(full, child.Name()), seen, out)
+					addAppEntry(ctx, filepath.Join(full, child.Name()), preferredLanguages, seen, out)
 				}
 			}
 			continue
 		}
-		addAppEntry(ctx, full, seen, out)
+		addAppEntry(ctx, full, preferredLanguages, seen, out)
 	}
 }
 
-func addAppEntry(ctx context.Context, path string, seen map[string]bool, out *[]AppEntry) {
+func addAppEntry(ctx context.Context, path string, preferredLanguages []string, seen map[string]bool, out *[]AppEntry) {
 	if seen[path] {
 		return
 	}
@@ -156,6 +165,7 @@ func addAppEntry(ctx context.Context, path string, seen map[string]bool, out *[]
 		Path: path,
 		Name: strings.TrimSuffix(filepath.Base(path), ".app"),
 	}
+	entry.DisplayName = readAppDisplayName(ctx, path, preferredLanguages)
 	entry.BundleID = readBundleID(path)
 	entry.SizeKB, _ = pathSizeKB(ctx, OSRunner{}, path)
 	entry.LastUsedEpoch = readLastUsedEpoch(path)
@@ -2216,14 +2226,15 @@ func FormatBytes(kb int64) string {
 }
 
 // PrintAppList writes a TSV listing of installed apps:
-// path, name, bundleID, sizeKB, lastUsedEpoch, nameDisplayWidth.
-// nameDisplayWidth is the rendered width (CJK/fullwidth = 2) so callers
-// can pad in monospaced terminals without miscounting bytes vs columns.
+// path, user-facing name, bundleID, sizeKB, lastUsedEpoch, nameDisplayWidth.
+// nameDisplayWidth is the rendered width (CJK/fullwidth = 2) so callers can
+// pad localized names without miscounting bytes vs terminal columns.
 func PrintAppList(out io.Writer, apps []AppEntry) {
 	for _, app := range apps {
+		name := app.displayName()
 		fmt.Fprintf(out, "%s\t%s\t%s\t%d\t%d\t%d\n",
-			app.Path, app.Name, app.BundleID, app.SizeKB, app.LastUsedEpoch,
-			DisplayWidth(app.Name))
+			app.Path, name, app.BundleID, app.SizeKB, app.LastUsedEpoch,
+			DisplayWidth(name))
 	}
 }
 

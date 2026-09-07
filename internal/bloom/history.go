@@ -226,7 +226,7 @@ func historySize(sizeKB string) string {
 }
 
 func logUninstallResult(res UninstallResult) {
-	appName := res.App.Name
+	appName := res.App.displayName()
 	if strings.TrimSpace(appName) == "" {
 		appName = strings.TrimSuffix(filepath.Base(res.App.Path), ".app")
 	}
