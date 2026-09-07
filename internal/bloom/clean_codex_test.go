@@ -48,6 +48,9 @@ func (r *codexTestRunner) Run(ctx context.Context, name string, args ...string) 
 		}
 		return CommandOutput{Stdout: r.processTables[index]}
 	case "lsof":
+		if cleanTestLsofVisibilityProbe(args) {
+			return CommandOutput{Stdout: "p1\nu0\n"}
+		}
 		return r.lsofOutput
 	case "mdfind":
 		return r.mdfindOutput

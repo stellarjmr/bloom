@@ -9,14 +9,15 @@ import (
 )
 
 type cleanProbeRunner struct {
-	processTables []string
-	psCalls       int
-	onPS          func(call int)
-	psOutput      *CommandOutput
-	lsofAvailable bool
-	lsofOutput    CommandOutput
-	lsofOutputs   []CommandOutput
-	lsofCalls     int
+	processTables        []string
+	psCalls              int
+	onPS                 func(call int)
+	psOutput             *CommandOutput
+	lsofAvailable        bool
+	lsofOutput           CommandOutput
+	lsofOutputs          []CommandOutput
+	lsofCalls            int
+	lsofVisibilityOutput *CommandOutput
 }
 
 func (r *cleanProbeRunner) LookPath(file string) (string, error) {
@@ -27,7 +28,7 @@ func (r *cleanProbeRunner) LookPath(file string) (string, error) {
 }
 
 func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
-	switch name {
+	switch filepath.Base(name) {
 	case "ps":
 		if r.psOutput != nil {
 			return *r.psOutput
@@ -45,6 +46,12 @@ func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string)
 		}
 		return CommandOutput{Stdout: r.processTables[index]}
 	case "lsof":
+		if cleanTestLsofVisibilityProbe(args) {
+			if r.lsofVisibilityOutput != nil {
+				return *r.lsofVisibilityOutput
+			}
+			return CommandOutput{Stdout: "p1\nu0\n"}
+		}
 		if len(r.lsofOutputs) > 0 {
 			index := r.lsofCalls
 			r.lsofCalls++
@@ -57,6 +64,10 @@ func (r *cleanProbeRunner) Run(ctx context.Context, name string, args ...string)
 	default:
 		return OSRunner{}.Run(ctx, name, args...)
 	}
+}
+
+func cleanTestLsofVisibilityProbe(args []string) bool {
+	return len(args) == 3 && args[0] == "-Fpu" && args[1] == "-p" && args[2] == "1"
 }
 
 func TestValidateCleanPathSafetyBoundaries(t *testing.T) {
@@ -920,6 +931,7 @@ func TestRunCleanMovesStaleSQLiteSharedMemoryCacheToTrash(t *testing.T) {
 	runner := &cleanProbeRunner{
 		processTables: []string{"/sbin/launchd\n"},
 		lsofAvailable: true,
+		lsofOutput:    codexClosedLsofOutput(t),
 	}
 	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
 	if len(res.Failed) != 0 {
@@ -961,6 +973,101 @@ func TestRunCleanSkipsSQLiteCacheWithOpenHandle(t *testing.T) {
 	}
 	if !cleanResultSkippedFor(res, cache, "live SQLite cache") {
 		t.Fatalf("open SQLite skip missing: %#v", res.Skipped)
+	}
+}
+
+func TestRunCleanTreatsSuccessfulLsofStatusAsOpenEvidence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cache := filepath.Join(home, "Library", "Caches", "DatabaseApp")
+	db := filepath.Join(cache, "Cache.db")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(db, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+		lsofOutput:    CommandOutput{},
+	}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	if cleanResultContains(res, cache) {
+		t.Fatalf("successful lsof status was treated as idle: %#v", res.Targets)
+	}
+	if !cleanResultSkippedFor(res, cache, "live SQLite cache") {
+		t.Fatalf("positive lsof evidence skip missing: %#v", res.Skipped)
+	}
+}
+
+func TestRunCleanRequiresCompleteLsofVisibility(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cache := filepath.Join(home, "Library", "Caches", "DatabaseApp")
+	db := filepath.Join(cache, "Cache.db")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(db, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	incompleteVisibility := CommandOutput{Stdout: "p42\nu501\n"}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables:        []string{"/sbin/launchd\n"},
+		lsofAvailable:        true,
+		lsofVisibilityOutput: &incompleteVisibility,
+	}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: runner})
+	if cleanResultContains(res, cache) {
+		t.Fatalf("SQLite cache appeared without complete lsof visibility: %#v", res.Targets)
+	}
+	if !cleanResultSkippedFor(res, cache, "SQLite open-file state unknown") {
+		t.Fatalf("incomplete visibility skip missing: %#v", res.Skipped)
+	}
+}
+
+func TestRunCleanRechecksIncompleteDownloadAtActionBoundary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	download := filepath.Join(home, "Downloads", "movie.part")
+	if err := os.MkdirAll(filepath.Dir(download), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(download, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	runner := &cleanProbeRunner{
+		processTables: []string{"/sbin/launchd\n"},
+		lsofAvailable: true,
+		lsofOutputs: []CommandOutput{
+			codexClosedLsofOutput(t),
+			codexClosedLsofOutput(t),
+			{},
+		},
+	}
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: runner})
+	if runner.lsofCalls != 3 {
+		t.Fatalf("incomplete-download lsof calls = %d, want final action-boundary probe", runner.lsofCalls)
+	}
+	if cleanResultContains(res, download) {
+		t.Fatalf("resumed incomplete download moved to Trash: %#v", res.Targets)
+	}
+	if !cleanResultSkippedFor(res, download, "open incomplete download") {
+		t.Fatalf("resumed-download skip missing: %#v", res.Skipped)
+	}
+	if _, err := os.Stat(download); err != nil {
+		t.Fatalf("resumed incomplete download was touched: %v", err)
 	}
 }
 
@@ -1027,8 +1134,8 @@ func TestRunCleanStopsPendingTrashMovesAfterSafetyProbeTimeout(t *testing.T) {
 		processTables: []string{"/sbin/launchd\n"},
 		lsofAvailable: true,
 		lsofOutputs: []CommandOutput{
-			{},
-			{},
+			codexClosedLsofOutput(t),
+			codexClosedLsofOutput(t),
 			{Err: context.DeadlineExceeded},
 		},
 	}

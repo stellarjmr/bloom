@@ -296,7 +296,7 @@ func cleanAutodeskFusionActivityReason(ctx context.Context, activity *cleanActiv
 	if cleanAutodeskFusionRuntimeActive(activity.processTable) {
 		return "Autodesk Fusion is running"
 	}
-	if reason := cleanAutodeskFusionOpenFileReason(ctx, activity.runner, target.Path); reason != "" {
+	if reason := cleanAutodeskFusionOpenFileReason(ctx, activity, target.Path); reason != "" {
 		return reason
 	}
 
@@ -313,7 +313,7 @@ func cleanAutodeskFusionActivityReason(ctx context.Context, activity *cleanActiv
 	if reason := cleanAutodeskFusionEligibilityReason(ctx, activity.runner, target); reason != "" {
 		return reason
 	}
-	return cleanAutodeskFusionOpenFileReason(ctx, activity.runner, target.Path)
+	return cleanAutodeskFusionOpenFileReason(ctx, activity, target.Path)
 }
 
 func cleanAutodeskFusionEligibilityReason(ctx context.Context, runner Runner, target CleanTarget) string {
@@ -356,24 +356,15 @@ func cleanAutodeskFusionRuntimeActive(table string) bool {
 	return false
 }
 
-func cleanAutodeskFusionOpenFileReason(ctx context.Context, runner Runner, target string) string {
-	if _, err := runner.LookPath("lsof"); err != nil {
-		return "Autodesk Fusion open-file state unknown"
+func cleanAutodeskFusionOpenFileReason(ctx context.Context, activity *cleanActivityProbe, target string) string {
+	out, issue := activity.runCompleteLsof(ctx, "-Fn", "+D", target)
+	if issue != "" {
+		return "Autodesk Fusion open-file " + issue
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	out := runner.Run(probeCtx, "lsof", "-Fn", "+D", target)
-	probeErr := probeCtx.Err()
-	cancel()
-	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
-		return "Autodesk Fusion open-file " + cleanProbeStopReason(ctx, "check")
+	if out.Err == nil || cleanLsofHasFileRecord(out.Stdout) {
+		return "Autodesk Fusion files are open"
 	}
-	if out.Err == nil {
-		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {
-			return "Autodesk Fusion files are open"
-		}
-		return ""
-	}
-	if isLsofNoOpenFiles(out) && strings.TrimSpace(out.Stderr) == "" {
+	if isLsofNoOpenFiles(out) {
 		return ""
 	}
 	return "Autodesk Fusion open-file state unknown"

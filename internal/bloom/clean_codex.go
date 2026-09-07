@@ -313,7 +313,7 @@ func cleanCodexStagingActivityReason(ctx context.Context, activity *cleanActivit
 	if target.special.kind == cleanSpecialCodexSparkle && cleanCodexSparkleUpdaterActive(activity.processTable) {
 		return "Sparkle updater is running"
 	}
-	if reason := cleanCodexOpenFileReason(ctx, activity.runner, target.special.root); reason != "" {
+	if reason := cleanCodexOpenFileReason(ctx, activity, target.special.root); reason != "" {
 		return reason
 	}
 	return cleanCodexStagingEligibilityReason(ctx, activity.runner, target, time.Now())
@@ -381,24 +381,15 @@ func cleanCodexSparkleUpdaterActive(table string) bool {
 	return false
 }
 
-func cleanCodexOpenFileReason(ctx context.Context, runner Runner, root string) string {
-	if _, err := runner.LookPath("lsof"); err != nil {
-		return "Codex staging open-file state unknown"
+func cleanCodexOpenFileReason(ctx context.Context, activity *cleanActivityProbe, root string) string {
+	out, issue := activity.runCompleteLsof(ctx, "-Fn", "+D", root)
+	if issue != "" {
+		return "Codex staging open-file " + issue
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	out := runner.Run(probeCtx, "lsof", "-Fn", "+D", root)
-	probeErr := probeCtx.Err()
-	cancel()
-	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
-		return "Codex staging open-file " + cleanProbeStopReason(ctx, "check")
+	if out.Err == nil || cleanLsofHasFileRecord(out.Stdout) {
+		return "Codex staging files are open"
 	}
-	if out.Err == nil {
-		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {
-			return "Codex staging files are open"
-		}
-		return ""
-	}
-	if isLsofNoOpenFiles(out) && strings.TrimSpace(out.Stderr) == "" {
+	if isLsofNoOpenFiles(out) {
 		return ""
 	}
 	return "Codex staging open-file state unknown"

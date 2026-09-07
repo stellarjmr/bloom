@@ -74,6 +74,10 @@ type cleanActivityProbe struct {
 	processTable string
 	processKnown bool
 	processStop  string
+	lsofChecked  bool
+	lsofMode     string
+	lsofPath     string
+	lsofIssue    string
 	loaded       bool
 }
 
@@ -369,10 +373,6 @@ func RunClean(ctx context.Context, opts CleanOptions) CleanResult {
 			logCleanOperation("trash", "0", "rejected", target.Path)
 			continue
 		}
-		if shouldSkipOpenIncompleteDownload(ctx, runner, target.Path) {
-			res.Skipped = append(res.Skipped, CleanSkip{Path: target.Path, Reason: "open incomplete download"})
-			continue
-		}
 		if reason := cleanTargetActivityReason(ctx, activity, target); reason != "" {
 			if cleanSafetyProbeStopsRun(reason) {
 				res.Failed = append(res.Failed, CleanSkip{Path: target.Path, Reason: reason})
@@ -465,7 +465,10 @@ func (p *cleanActivityProbe) skipReason(ctx context.Context, path string) string
 	if reason := cleanToolCacheContainmentReason(path); reason != "" {
 		return reason
 	}
-	if reason := cleanSQLiteActivityReason(ctx, p.runner, path); reason != "" {
+	if reason := cleanIncompleteDownloadActivityReason(ctx, p, path); reason != "" {
+		return reason
+	}
+	if reason := cleanSQLiteActivityReason(ctx, p, path); reason != "" {
 		return reason
 	}
 	if family, programs := cleanProcessGuardForPath(path); family != "" {
@@ -531,6 +534,64 @@ func cleanProbeStopReason(ctx context.Context, label string) string {
 func cleanSafetyProbeStopsRun(reason string) bool {
 	reason = strings.ToLower(reason)
 	return strings.Contains(reason, " check timed out") || strings.Contains(reason, " check interrupted")
+}
+
+func (p *cleanActivityProbe) completeLsofIssue(ctx context.Context) string {
+	if p.lsofChecked {
+		return p.lsofIssue
+	}
+	p.lsofChecked = true
+	lsofPath, err := p.runner.LookPath("lsof")
+	if err != nil || lsofPath == "" {
+		p.lsofIssue = "state unknown"
+		return p.lsofIssue
+	}
+	p.lsofPath = lsofPath
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	out := p.runner.Run(probeCtx, lsofPath, "-Fpu", "-p", "1")
+	probeErr := probeCtx.Err()
+	cancel()
+	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		p.lsofIssue = "visibility " + cleanProbeStopReason(ctx, "check")
+		return p.lsofIssue
+	}
+	if out.Err != nil || !cleanLsofSeesRootProcess(out.Stdout) {
+		p.lsofIssue = "state unknown"
+		return p.lsofIssue
+	}
+	p.lsofMode = "direct"
+	return ""
+}
+
+func (p *cleanActivityProbe) runCompleteLsof(ctx context.Context, args ...string) (CommandOutput, string) {
+	if issue := p.completeLsofIssue(ctx); issue != "" {
+		return CommandOutput{}, issue
+	}
+	if p.lsofMode != "direct" || p.lsofPath == "" {
+		return CommandOutput{}, "state unknown"
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	out := p.runner.Run(probeCtx, p.lsofPath, args...)
+	probeErr := probeCtx.Err()
+	cancel()
+	if probeErr != nil || errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
+		return out, cleanProbeStopReason(ctx, "check")
+	}
+	return out, ""
+}
+
+func cleanLsofSeesRootProcess(records string) bool {
+	hasPID := false
+	hasUID := false
+	for _, line := range strings.Split(records, "\n") {
+		switch strings.TrimSpace(line) {
+		case "p1":
+			hasPID = true
+		case "u0":
+			hasUID = true
+		}
+	}
+	return hasPID && hasUID
 }
 
 func cleanReverseDNSCacheOwner(path string) string {
@@ -751,16 +812,13 @@ func cleanPathAtOrBelow(path, root string) bool {
 	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
-func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) string {
+func cleanSQLiteActivityReason(ctx context.Context, activity *cleanActivityProbe, path string) string {
 	families, uncertain := cleanSQLiteFamilies(path)
 	if uncertain {
 		return "SQLite state unknown"
 	}
 	if len(families) == 0 {
 		return ""
-	}
-	if _, err := runner.LookPath("lsof"); err != nil {
-		return "SQLite open-file state unknown"
 	}
 	args := []string{"-Fn", "--"}
 	for _, base := range families {
@@ -773,20 +831,12 @@ func cleanSQLiteActivityReason(ctx context.Context, runner Runner, path string) 
 	if len(args) == 2 {
 		return ""
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	out := runner.Run(probeCtx, "lsof", args...)
-	if probeCtx.Err() != nil {
-		return "SQLite open-file " + cleanProbeStopReason(ctx, "check")
+	out, issue := activity.runCompleteLsof(ctx, args...)
+	if issue != "" {
+		return "SQLite open-file " + issue
 	}
-	if errors.Is(out.Err, context.DeadlineExceeded) || errors.Is(out.Err, context.Canceled) {
-		return "SQLite open-file " + cleanProbeStopReason(ctx, "check")
-	}
-	if out.Err == nil {
-		if strings.Contains(out.Stdout, "\nn/") || strings.HasPrefix(out.Stdout, "n/") {
-			return "live SQLite cache"
-		}
-		return ""
+	if out.Err == nil || cleanLsofHasFileRecord(out.Stdout) {
+		return "live SQLite cache"
 	}
 	if isLsofNoOpenFiles(out) {
 		return ""
@@ -1871,17 +1921,34 @@ func shouldSkipOpenIncompleteDownload(ctx context.Context, runner Runner, path s
 	if !isIncompleteDownloadCleanPath(path) {
 		return false
 	}
-	if _, err := runner.LookPath("lsof"); err != nil {
-		return true
+	activity := &cleanActivityProbe{runner: runner}
+	return cleanIncompleteDownloadActivityReason(ctx, activity, path) != ""
+}
+
+func cleanIncompleteDownloadActivityReason(ctx context.Context, activity *cleanActivityProbe, path string) string {
+	if !isIncompleteDownloadCleanPath(path) {
+		return ""
 	}
-	out := runner.Run(ctx, "lsof", path)
-	if out.Err == nil {
-		return true
+	out, issue := activity.runCompleteLsof(ctx, "-Fn", "--", path)
+	if issue != "" {
+		return "incomplete download open-file " + issue
+	}
+	if out.Err == nil || cleanLsofHasFileRecord(out.Stdout) {
+		return "open incomplete download"
 	}
 	if isLsofNoOpenFiles(out) {
-		return false
+		return ""
 	}
-	return true
+	return "incomplete download open-file state unknown"
+}
+
+func cleanLsofHasFileRecord(records string) bool {
+	for _, line := range strings.Split(records, "\n") {
+		if strings.HasPrefix(line, "n") {
+			return true
+		}
+	}
+	return false
 }
 
 func isIncompleteDownloadCleanPath(path string) bool {
@@ -1898,7 +1965,7 @@ func isLsofNoOpenFiles(out CommandOutput) bool {
 	if strings.Contains(combined, "permission") || strings.Contains(combined, "operation not permitted") {
 		return false
 	}
-	return strings.TrimSpace(out.Stdout) == ""
+	return strings.TrimSpace(out.Stdout) == "" && strings.TrimSpace(out.Stderr) == ""
 }
 
 func moveCleanPathToTrash(ctx context.Context, runner Runner, path, expectedIdentity string) error {

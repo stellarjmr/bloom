@@ -49,6 +49,9 @@ func (r *fusionTestRunner) Run(ctx context.Context, name string, args ...string)
 		}
 		return CommandOutput{Stdout: r.processTables[index]}
 	case "lsof":
+		if cleanTestLsofVisibilityProbe(args) {
+			return CommandOutput{Stdout: "p1\nu0\n"}
+		}
 		return r.lsofOutput
 	case "osascript":
 		r.aliasCalls = append(r.aliasCalls, append([]string{}, args...))
