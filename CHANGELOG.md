@@ -16,6 +16,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Reclaim verified older Autodesk Fusion webdeploy bundles while retaining current, equal, newer, malformed, redirected, active, open, or changed versions and moving every eligible version to Trash.
 - Stop the remaining clean run when a process or SQLite/open-file safety probe times out or is interrupted, reporting the current target as failed instead of continuing with partial evidence.
 - Require complete `lsof` visibility before an idle result can authorize cleanup, treat successful status as positive open-file evidence, and recheck incomplete downloads after sizing and at the Trash boundary.
+- Disable ANSI styling automatically when output is redirected or `TERM=dumb`, while continuing to honor `NO_COLOR` in both the shell front controller and Go progress output.
 
 ## v0.6.25 - 2026-08-21
 

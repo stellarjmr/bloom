@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -102,6 +103,30 @@ func TestProgressRenderStartDoesNotDuplicateNonTerminalOutput(t *testing.T) {
 	want := "[━━━━━━━━] 100% … npm 1 package"
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestProgressDisablesColorForNonTerminalOutput(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	cfg := DefaultConfig()
+	var out bytes.Buffer
+
+	NewProgress(&out, cfg).Render(1, 1, TaskResult{Name: "npm", Status: StatusOK})
+
+	if strings.Contains(out.String(), "\033[") {
+		t.Fatalf("redirected progress output contains ANSI escapes: %q", out.String())
+	}
+}
+
+func TestProgressDisablesColorForDumbTerminal(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "dumb")
+	cfg := DefaultConfig()
+	progress := NewProgress(os.Stdout, cfg)
+
+	if progress.cfg.Color {
+		t.Fatal("TERM=dumb left progress color enabled")
 	}
 }
 

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-if [[ -n "${NO_COLOR:-}" ]]; then
+if [[ -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" || ! -t 1 ]]; then
   GREEN=''
   CYAN=''
   BLUE=''
@@ -19,7 +19,11 @@ else
   RED=$'\033[0;31m'
   NC=$'\033[0m'
 fi
-CLEAR_EOL=$'\033[K'
+if [[ "${TERM:-}" != "dumb" && -t 1 ]]; then
+  CLEAR_EOL=$'\033[K'
+else
+  CLEAR_EOL=''
+fi
 
 resolve_script_dir() {
   local source="${BASH_SOURCE[0]}"
