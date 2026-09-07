@@ -38,6 +38,14 @@ type AppEntry struct {
 	LastUsedEpoch int64
 }
 
+func appBundleBaseName(path string) string {
+	base := filepath.Base(path)
+	if len(base) >= len(".app") && strings.EqualFold(base[len(base)-len(".app"):], ".app") {
+		return base[:len(base)-len(".app")]
+	}
+	return base
+}
+
 // UninstallResult captures the outcome for a single app removal.
 type UninstallResult struct {
 	App                   AppEntry
@@ -163,7 +171,7 @@ func addAppEntry(ctx context.Context, path string, preferredLanguages []string, 
 	seen[path] = true
 	entry := AppEntry{
 		Path: path,
-		Name: strings.TrimSuffix(filepath.Base(path), ".app"),
+		Name: appBundleBaseName(path),
 	}
 	entry.DisplayName = readAppDisplayName(ctx, path, preferredLanguages)
 	entry.BundleID = readBundleID(path)
@@ -333,10 +341,7 @@ func appPathStringIsProtected(path string) bool {
 	if lower == "/system" || strings.HasPrefix(lower, "/system/") {
 		return true
 	}
-	base := filepath.Base(path)
-	if strings.HasSuffix(strings.ToLower(base), ".app") {
-		base = base[:len(base)-len(".app")]
-	}
+	base := appBundleBaseName(path)
 	switch strings.ToLower(base) {
 	case "finder", "system preferences", "system settings", "safari",
 		"app store", "messages", "facetime", "mail", "contacts",
@@ -355,7 +360,7 @@ func appPathStringIsProtected(path string) bool {
 func officialUninstallerVendor(app AppEntry) string {
 	bundleID := strings.ToLower(app.BundleID)
 	name := strings.ToLower(app.Name)
-	pathName := strings.ToLower(strings.TrimSuffix(filepath.Base(app.Path), ".app"))
+	pathName := strings.ToLower(appBundleBaseName(app.Path))
 	for _, rule := range officialUninstallerRules {
 		for _, prefix := range rule.BundlePrefixes {
 			if prefix != "" && strings.HasPrefix(bundleID, strings.ToLower(prefix)) {

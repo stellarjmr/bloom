@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -822,7 +821,7 @@ func (a *App) runUninstall(args []string) int {
 			sizeKB, _ := pathSizeKB(ctx, OSRunner{}, path)
 			entry = AppEntry{
 				Path:     path,
-				Name:     filepath.Base(strings.TrimSuffix(strings.TrimRight(path, "/"), ".app")),
+				Name:     appBundleBaseName(strings.TrimRight(path, string(os.PathSeparator))),
 				BundleID: readBundleID(path),
 				SizeKB:   sizeKB,
 			}

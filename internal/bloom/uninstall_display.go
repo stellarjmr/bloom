@@ -27,7 +27,7 @@ func (app AppEntry) displayName() string {
 	if name := sanitizeAppDisplayName(app.Name); name != "" {
 		return name
 	}
-	return sanitizeAppDisplayName(strings.TrimSuffix(filepath.Base(app.Path), ".app"))
+	return sanitizeAppDisplayName(appBundleBaseName(app.Path))
 }
 
 func sanitizeAppDisplayName(value string) string {
@@ -171,7 +171,7 @@ func uniqueFoldedStrings(values []string) []string {
 }
 
 func readAppDisplayName(ctx context.Context, appPath string, preferredLanguages []string) string {
-	fallback := sanitizeAppDisplayName(strings.TrimSuffix(filepath.Base(appPath), ".app"))
+	fallback := sanitizeAppDisplayName(appBundleBaseName(appPath))
 	plists, _ := bundleInfoPlistCandidates(appPath)
 	for _, plist := range plists {
 		values := readPlistStringValues(ctx, plist,

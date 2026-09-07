@@ -34,6 +34,21 @@ func TestLocalizationDirectoryCandidatesCoverCommonBundleSpellings(t *testing.T)
 	}
 }
 
+func TestAppBundleBaseNameHandlesCaseVariantSuffixes(t *testing.T) {
+	for _, path := range []string{
+		"/Applications/Example.app",
+		"/Applications/Example.APP",
+		"/Applications/Example.ApP",
+	} {
+		if got := appBundleBaseName(path); got != "Example" {
+			t.Errorf("appBundleBaseName(%q) = %q, want Example", path, got)
+		}
+	}
+	if got := (AppEntry{Path: "/Applications/Example.APP"}).displayName(); got != "Example" {
+		t.Fatalf("display fallback = %q, want Example", got)
+	}
+}
+
 func TestReadAppDisplayNameUsesPreferredLocalization(t *testing.T) {
 	appPath := filepath.Join(t.TempDir(), "VideoFusion-macOS.app")
 	writeDisplayTestInfoPlist(t, appPath, "VideoFusion-macOS", "CapCut", "en")
