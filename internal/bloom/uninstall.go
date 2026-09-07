@@ -1496,20 +1496,29 @@ func bootoutLoginItemHelpers(ctx context.Context, runner Runner, helperIDs []str
 // shipped with macOS.
 const lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
 
+const (
+	launchServicesUnregisterTimeout = 3 * time.Second
+	launchServicesGCTimeout         = 10 * time.Second
+)
+
 // unregisterLaunchServices removes the app bundle from the LaunchServices
 // database so stale entries do not linger in Spotlight or "Open With".
 func unregisterLaunchServices(ctx context.Context, runner Runner, appPath string) {
 	if appPath == "" {
 		return
 	}
-	_ = runner.Run(ctx, lsregisterPath, "-u", appPath)
+	probeCtx, cancel := context.WithTimeout(ctx, launchServicesUnregisterTimeout)
+	defer cancel()
+	_ = runner.Run(probeCtx, lsregisterPath, "-u", appPath)
 }
 
-// refreshLaunchServices garbage-collects and rebuilds the LaunchServices
-// database so removed apps disappear from system UIs.
+// refreshLaunchServices garbage-collects stale LaunchServices records. The
+// removed bundle is unregistered directly above; forcing a domain-wide rebuild
+// here can terminate unrelated active app extensions and network tunnels.
 func refreshLaunchServices(ctx context.Context, runner Runner) {
-	_ = runner.Run(ctx, lsregisterPath, "-gc")
-	_ = runner.Run(ctx, lsregisterPath, "-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system")
+	probeCtx, cancel := context.WithTimeout(ctx, launchServicesGCTimeout)
+	defer cancel()
+	_ = runner.Run(probeCtx, lsregisterPath, "-gc")
 }
 
 // removeAppsFromDock rewrites com.apple.dock to drop app tiles whose bundle id

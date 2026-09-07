@@ -108,7 +108,7 @@ Per-app cleanup runs in this order so brew can detect and clean its own metadata
 
 Dry runs and uninstall summaries print the exact Homebrew zap command when a cask is detected.
 
-After the batch completes Bloom rewrites the Dock plist, restarts Dock, rebuilds the LaunchServices database, and runs `brew autoremove` if any cask was removed.
+After the batch completes Bloom rewrites the Dock plist, restarts Dock when needed, garbage-collects stale LaunchServices records, and runs `brew autoremove` if any cask was removed. It unregisters each removed bundle directly and does not force a domain-wide LaunchServices rebuild, which could terminate unrelated active app extensions or network tunnels.
 
 Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear in the menu.
 

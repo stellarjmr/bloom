@@ -1568,6 +1568,21 @@ func TestBatchUninstallDoesNotQueryBackgroundTaskManagement(t *testing.T) {
 	}
 }
 
+func TestRefreshLaunchServicesDoesNotRebuildApplicationDomains(t *testing.T) {
+	r := &recordingRunner{outputs: map[string]CommandOutput{}}
+
+	refreshLaunchServices(context.Background(), r)
+
+	if !runnerCallContains(r.calls, lsregisterPath+" -gc") {
+		t.Fatalf("LaunchServices garbage collection missing: %#v", r.calls)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, " -r ") || strings.Contains(call, " -f ") || strings.Contains(call, " -domain ") {
+			t.Fatalf("domain-wide LaunchServices rebuild can restart active extensions: %#v", r.calls)
+		}
+	}
+}
+
 func TestRemoveAppsFromDockMatchesBundleIDAcrossDockArrays(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
