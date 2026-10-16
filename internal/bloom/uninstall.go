@@ -60,6 +60,47 @@ type UninstallResult struct {
 	SharedBundleSibling   bool
 	SharedBundleUncertain bool
 	SiblingPaths          []string
+	// AppReturned records that something reappeared at the app path after
+	// the bundle moved to Trash; the remaining data was left to that copy.
+	AppReturned bool
+	// AppPathErr records why the app path could not be checked after the
+	// bundle moved to Trash; the remaining data was kept as for a return.
+	AppPathErr error
+}
+
+// uninstallBundleMovedHook lets tests stand in for an updater that puts the
+// app back between the bundle's Trash move and its leftovers. Nil otherwise.
+var uninstallBundleMovedHook func(appPath string)
+
+var errAppPathOccupied = errors.New("app path is occupied again")
+
+// appPathStillEmpty returns nil only when the app path is confirmed absent
+// after its bundle moved to Trash. Anything there again returns
+// errAppPathOccupied, and any other probe error is returned as is, because
+// it cannot rule out a copy at the path.
+func appPathStillEmpty(appPath string) error {
+	_, err := os.Lstat(appPath)
+	switch {
+	case err == nil:
+		return errAppPathOccupied
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	default:
+		return err
+	}
+}
+
+// noteAppPathCheck records a failed app-path check on the result: a copy
+// back at the path marks the app returned, and any other error is kept as
+// the reason the path could not be checked.
+func (res *UninstallResult) noteAppPathCheck(err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, errAppPathOccupied):
+		res.AppReturned = true
+	default:
+		res.AppPathErr = err
+	}
 }
 
 type UninstallMovedPath struct {
@@ -1144,6 +1185,19 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		recordBloomMovedPath(app.Path, size)
 		return true
 	}
+	// An updater or a quick reinstall can put the app back the moment its
+	// bundle leaves, and from then on the data and registrations at its path
+	// belong to that copy. Each later step asks first; a probe that cannot
+	// rule out a copy counts as one, and the first answer other than an
+	// empty path sticks.
+	appPathClear := func() bool {
+		if res.AppReturned || res.AppPathErr != nil {
+			return false
+		}
+		err := appPathStillEmpty(app.Path)
+		res.noteAppPathCheck(err)
+		return err == nil
+	}
 	moveLeftoverPath := func(p string) {
 		size := pathSizes[p]
 		if _, err := os.Lstat(p); err != nil {
@@ -1162,8 +1216,11 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			}
 			expectedIdentity = planned.identity
 		}
-		if err := movePathToTrashStubbornWithIdentity(ctx, runner, p, expectedIdentity); err != nil {
-			res.Failed = append(res.Failed, p)
+		if err := movePathToTrashStubbornGuarded(ctx, runner, p, expectedIdentity, appPathClear); err != nil {
+			// A leftover kept for a returned app was not a failed move.
+			if !errors.Is(err, errTrashMoveStopped) {
+				res.Failed = append(res.Failed, p)
+			}
 			return
 		}
 		recordBloomMovedPath(p, size)
@@ -1181,20 +1238,33 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			res.Err = errors.New("app bundle was not removed; skipped related files to avoid partial uninstall")
 			return res
 		}
+		if uninstallBundleMovedHook != nil {
+			uninstallBundleMovedHook(app.Path)
+		}
 		for _, p := range paths {
 			if p == app.Path {
 				continue
+			}
+			if !appPathClear() {
+				break
 			}
 			moveLeftoverPath(p)
 		}
 	}
 
+	// Login items, helper agents, and the LaunchServices record are keyed by
+	// the app's path and identity, so a copy that came back keeps them. A
+	// step can wait seconds on another process, so each one asks again.
 	if !dryRun && res.AppRemoved {
 		if !sharedBundleData {
-			removeLoginItem(ctx, runner, app)
-			bootoutLoginItemHelpers(ctx, runner, loginItemHelpers)
+			if appPathClear() {
+				removeLoginItem(ctx, runner, app)
+			}
+			bootoutLoginItemHelpers(ctx, runner, loginItemHelpers, appPathClear)
 		}
-		unregisterLaunchServices(ctx, runner, app.Path)
+		if appPathClear() {
+			unregisterLaunchServices(ctx, runner, app.Path)
+		}
 	}
 
 	if !dryRun && !res.AppRemoved {
@@ -1222,6 +1292,7 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 	anyBrew := false
 	removedApps := []AppEntry{}
 	dockCleanupApps := []AppEntry{}
+	dockCleanupResults := []int{}
 
 	for _, app := range apps {
 		res := UninstallApp(ctx, runner, app, dryRun)
@@ -1232,8 +1303,9 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		sum.TotalRemovedKB += res.RemovedKB
 		if res.Err == nil && (dryRun || res.AppRemoved) {
 			removedApps = append(removedApps, res.App)
-			if !res.SharedBundleSibling && !res.SharedBundleUncertain {
+			if !res.SharedBundleSibling && !res.SharedBundleUncertain && !res.AppReturned && res.AppPathErr == nil {
 				dockCleanupApps = append(dockCleanupApps, res.App)
+				dockCleanupResults = append(dockCleanupResults, len(sum.Results)-1)
 			}
 		}
 		if res.BrewRemoved {
@@ -1245,7 +1317,11 @@ func BatchUninstall(ctx context.Context, runner Runner, apps []AppEntry, dryRun 
 		return sum
 	}
 	if len(dockCleanupApps) > 0 {
-		removeAppsFromDock(ctx, runner, dockCleanupApps)
+		// An app put back while the rest of the batch ran keeps its tiles,
+		// and its summary says why.
+		for n, err := range removeAppsFromDock(ctx, runner, dockCleanupApps) {
+			sum.Results[dockCleanupResults[n]].noteAppPathCheck(err)
+		}
 	}
 	if len(removedApps) > 0 {
 		refreshLaunchServices(ctx, runner)
@@ -1402,12 +1478,17 @@ func discoverLoginItemHelperBundleIDs(appPath string) []string {
 	return uniqueStrings(ids)
 }
 
-func bootoutLoginItemHelpers(ctx context.Context, runner Runner, helperIDs []string) {
+// bootoutLoginItemHelpers asks allowed before each helper and stops at the
+// first refusal, so a copy of the app that returns meanwhile keeps the rest.
+func bootoutLoginItemHelpers(ctx context.Context, runner Runner, helperIDs []string, allowed func() bool) {
 	if len(helperIDs) == 0 {
 		return
 	}
 	uid := os.Getuid()
 	for _, id := range helperIDs {
+		if !allowed() {
+			return
+		}
 		if !looksLikeBundleID(id) {
 			continue
 		}
@@ -1446,17 +1527,29 @@ func refreshLaunchServices(ctx context.Context, runner Runner) {
 
 // removeAppsFromDock rewrites com.apple.dock to drop app tiles whose bundle id
 // or file-data path matches one of the removed bundles, then restarts Dock.
-func removeAppsFromDock(ctx context.Context, runner Runner, apps []AppEntry) {
+// The rest of a batch can take minutes, so each app's path is checked again
+// before its tiles are read and before each deletion. An app that an updater
+// or a reinstall put back keeps its remaining tiles, and the result holds
+// that app's failed check at its index (nil for the others).
+func removeAppsFromDock(ctx context.Context, runner Runner, apps []AppEntry) []error {
 	if len(apps) == 0 {
-		return
+		return nil
 	}
+	kept := make([]error, len(apps))
 	changed := false
-	for _, app := range apps {
+nextApp:
+	for n, app := range apps {
+		if kept[n] = appPathStillEmpty(app.Path); kept[n] != nil {
+			continue
+		}
 		for _, array := range []string{"persistent-apps", "persistent-others", "recent-apps"} {
 			count := dockTileCount(ctx, runner, array)
 			for i := count - 1; i >= 0; i-- {
 				if !dockTileMatchesApp(ctx, runner, array, i, app) {
 					continue
+				}
+				if kept[n] = appPathStillEmpty(app.Path); kept[n] != nil {
+					continue nextApp
 				}
 				out := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
 					fmt.Sprintf("Delete :%s:%d", array, i),
@@ -1470,6 +1563,7 @@ func removeAppsFromDock(ctx context.Context, runner Runner, apps []AppEntry) {
 	if changed {
 		_ = runner.Run(ctx, "/usr/bin/killall", "Dock")
 	}
+	return kept
 }
 
 func dockPlistPath() string {
@@ -2114,17 +2208,40 @@ func movePathToTrashStubborn(ctx context.Context, runner Runner, p string) error
 }
 
 func movePathToTrashStubbornWithIdentity(ctx context.Context, runner Runner, p, expectedIdentity string) error {
+	return movePathToTrashStubbornGuarded(ctx, runner, p, expectedIdentity, nil)
+}
+
+var errTrashMoveStopped = errors.New("Trash move stopped by its guard")
+
+// movePathToTrashStubbornGuarded asks allowed, when set, before each step
+// that touches p: both move attempts and the flag and permission repairs
+// between them. Once it reports false, the move stops with
+// errTrashMoveStopped and leaves p as it is.
+func movePathToTrashStubbornGuarded(ctx context.Context, runner Runner, p, expectedIdentity string, allowed func() bool) error {
+	stopped := func() bool { return allowed != nil && !allowed() }
+	if stopped() {
+		return errTrashMoveStopped
+	}
 	if err := movePathToTrashWithIdentity(ctx, runner, p, expectedIdentity); err == nil {
 		return nil
 	}
 	if expectedIdentity != "" && cleanPathIdentity(p) != expectedIdentity {
 		return errors.New("app bundle changed during uninstall")
 	}
+	if stopped() {
+		return errTrashMoveStopped
+	}
 	_ = runner.Run(ctx, "/usr/bin/chflags", "-R", "nouchg,noschg,nouappnd", p)
 	if expectedIdentity != "" && cleanPathIdentity(p) != expectedIdentity {
 		return errors.New("app bundle changed during uninstall")
 	}
+	if stopped() {
+		return errTrashMoveStopped
+	}
 	_ = runner.Run(ctx, "/bin/chmod", "-R", "u+w", p)
+	if stopped() {
+		return errTrashMoveStopped
+	}
 	if err := movePathToTrashWithIdentity(ctx, runner, p, expectedIdentity); err == nil {
 		return nil
 	}

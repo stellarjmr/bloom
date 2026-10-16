@@ -1550,6 +1550,265 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	}
 }
 
+// commandHookRunner calls before ahead of every command it forwards.
+type commandHookRunner struct {
+	Runner
+	before func(name string, args []string)
+}
+
+func (r commandHookRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
+	r.before(name, args)
+	return r.Runner.Run(ctx, name, args...)
+}
+
+func TestBatchUninstallStopsALeftoverRetryWhenTheAppReturns(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the folder permission that fails the first move")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	leftover := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A locked parent folder fails the first move, so the repairs run.
+	caches := filepath.Dir(leftover)
+	if err := os.Chmod(caches, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(caches, 0o755) })
+
+	inner := &processRunner{}
+	r := commandHookRunner{Runner: inner, before: func(name string, args []string) {
+		if name != "/usr/bin/chflags" || args[len(args)-1] != leftover {
+			return
+		}
+		// The repair would let a retry through, but an updater puts the app
+		// back while it runs.
+		_ = os.Chmod(caches, 0o755)
+		writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	}}
+	app := AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}
+	res := BatchUninstall(context.Background(), r, []AppEntry{app}, false).Results[0]
+	if res.Err != nil || !res.AppRemoved || !res.AppReturned {
+		t.Fatalf("result = %+v, want the old bundle removed and the return recorded", res)
+	}
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("the retry moved the returned app's data: %v", err)
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("data kept for the returned app was reported as failed: %#v", res.Failed)
+	}
+	if runnerCallContains(inner.calls, "/bin/chmod -R u+w "+leftover) {
+		t.Fatalf("the permission repair touched the returned app's data: %#v", inner.calls)
+	}
+}
+
+func TestBatchUninstallKeepsDataWhenTheAppPathCannotBeChecked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can still look inside the locked folder")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	leftover := filepath.Join(home, "Library", "Caches", "com.example.foo")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appsDir := filepath.Dir(appPath)
+	previous := uninstallBundleMovedHook
+	uninstallBundleMovedHook = func(string) {
+		// The folder turns unreadable during a reinstall, hiding whether a
+		// copy is back.
+		if err := os.Chmod(appsDir, 0o000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		uninstallBundleMovedHook = previous
+		_ = os.Chmod(appsDir, 0o755)
+	})
+
+	r := &processRunner{}
+	app := AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}
+	summary := BatchUninstall(context.Background(), r, []AppEntry{app}, false)
+	res := summary.Results[0]
+	if res.Err != nil || !res.AppRemoved || res.AppReturned || !errors.Is(res.AppPathErr, os.ErrPermission) {
+		t.Fatalf("result = %+v, want the old bundle removed and the failed check recorded", res)
+	}
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("data moved although the app path could not be checked: %v", err)
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("kept data was reported as failed: %#v", res.Failed)
+	}
+	for _, forbidden := range []string{"/usr/bin/osascript -e tell application \"System Events\"", lsregisterPath + " -u", "/usr/libexec/PlistBuddy"} {
+		if runnerCallContains(r.calls, forbidden) {
+			t.Fatalf("post-removal step %q ran without a confirmed empty app path: %#v", forbidden, r.calls)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	(&App{Out: &out, Err: &errOut}).printUninstallSummary(summary, false, true)
+	if !strings.Contains(out.String(), "kept everything not yet removed because the app path could not be checked: ") {
+		t.Fatalf("summary did not explain the kept data: %q", out.String())
+	}
+}
+
+func TestBatchUninstallChecksTheAppPathBeforeEachTeardownStep(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		returnsDuring func(name string, args []string) bool
+		wantBootouts  int
+	}{
+		{
+			name: "Login Item removal",
+			returnsDuring: func(name string, args []string) bool {
+				return name == "/usr/bin/osascript" && strings.Contains(strings.Join(args, " "), `tell application "System Events"`)
+			},
+			wantBootouts: 0,
+		},
+		{
+			name: "first helper bootout",
+			returnsDuring: func(name string, args []string) bool {
+				return name == "/bin/launchctl" && len(args) > 0 && args[0] == "bootout"
+			},
+			wantBootouts: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+			appPath := filepath.Join(home, "Applications", "Foo.app")
+			writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+			for _, helper := range []string{"FooHelperA", "FooHelperB"} {
+				writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "Library", "LoginItems", helper+".app"), "com.example.foo."+strings.ToLower(helper), helper)
+			}
+			if helpers := discoverLoginItemHelperBundleIDs(appPath); len(helpers) != 2 {
+				t.Fatalf("login item helpers = %#v, want the fixture's two helpers", helpers)
+			}
+
+			inner := &processRunner{}
+			r := commandHookRunner{Runner: inner, before: func(name string, args []string) {
+				if tc.returnsDuring(name, args) {
+					// A reinstall finishes while this step runs.
+					writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+				}
+			}}
+			app := AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}
+			res := BatchUninstall(context.Background(), r, []AppEntry{app}, false).Results[0]
+			if res.Err != nil || !res.AppRemoved || !res.AppReturned {
+				t.Fatalf("result = %+v, want the old bundle removed and the return recorded", res)
+			}
+			if !runnerCallContains(inner.calls, `tell application "System Events"`) {
+				t.Fatalf("Login Item removal did not run before the return: %#v", inner.calls)
+			}
+			bootouts := 0
+			for _, call := range inner.calls {
+				if strings.HasPrefix(call, "/bin/launchctl bootout ") {
+					bootouts++
+				}
+			}
+			if bootouts != tc.wantBootouts {
+				t.Fatalf("helper bootouts = %d, want %d: %#v", bootouts, tc.wantBootouts, inner.calls)
+			}
+			for _, forbidden := range []string{lsregisterPath + " -u", "/usr/libexec/PlistBuddy"} {
+				if runnerCallContains(inner.calls, forbidden) {
+					t.Fatalf("step %q ran after the app came back: %#v", forbidden, inner.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestBatchUninstallReportsAnAppThatReturnsBeforeTheDockCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	fooPath := filepath.Join(home, "Applications", "Foo.app")
+	barPath := filepath.Join(home, "Applications", "Bar.app")
+	writeTestInfoPlist(t, fooPath, "com.example.foo", "foo")
+	writeTestInfoPlist(t, barPath, "com.example.bar", "bar")
+
+	inner := &processRunner{}
+	r := commandHookRunner{Runner: inner, before: func(name string, args []string) {
+		if name == "/usr/bin/osascript" && strings.Contains(strings.Join(args, " "), `is "Bar"`) {
+			// An updater puts Foo back while the batch is still on Bar.
+			writeTestInfoPlist(t, fooPath, "com.example.foo", "foo")
+		}
+	}}
+	summary := BatchUninstall(context.Background(), r, []AppEntry{
+		{Path: fooPath, Name: "Foo", BundleID: "com.example.foo"},
+		{Path: barPath, Name: "Bar", BundleID: "com.example.bar"},
+	}, false)
+	foo, bar := summary.Results[0], summary.Results[1]
+	if foo.Err != nil || !foo.AppRemoved || !foo.AppReturned {
+		t.Fatalf("Foo result = %+v, want its return before the Dock cleanup recorded", foo)
+	}
+	if bar.Err != nil || !bar.AppRemoved || bar.AppReturned || bar.AppPathErr != nil {
+		t.Fatalf("Bar result = %+v, want a plain removal", bar)
+	}
+
+	var out, errOut bytes.Buffer
+	(&App{Out: &out, Err: &errOut}).printUninstallSummary(summary, false, false)
+	if !strings.Contains(out.String(), "kept everything not yet removed because "+fooPath+" reappeared") {
+		t.Fatalf("summary did not report Foo's return: %q", out.String())
+	}
+}
+
+func TestBatchUninstallKeepsDataWhenAppReappearsAfterBundleMove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	leftovers := []string{
+		filepath.Join(home, "Library", "Caches", "com.example.foo"),
+		filepath.Join(home, "Library", "Application Support", "Foo"),
+	}
+	for _, path := range leftovers {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := uninstallBundleMovedHook
+	uninstallBundleMovedHook = func(path string) {
+		// An updater installs a fresh copy right after the old bundle moved.
+		writeTestInfoPlist(t, path, "com.example.foo", "foo")
+	}
+	t.Cleanup(func() { uninstallBundleMovedHook = previous })
+
+	r := &processRunner{}
+	app := AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}
+	summary := BatchUninstall(context.Background(), r, []AppEntry{app}, false)
+	res := summary.Results[0]
+	if res.Err != nil || !res.AppRemoved || !res.AppReturned {
+		t.Fatalf("result = %+v, want the old bundle removed and the return recorded", res)
+	}
+	for _, path := range leftovers {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("data of the returned app %q was moved: %v", path, err)
+		}
+	}
+	for _, forbidden := range []string{"/usr/bin/osascript -e tell application \"System Events\"", lsregisterPath + " -u", "/usr/libexec/PlistBuddy"} {
+		if runnerCallContains(r.calls, forbidden) {
+			t.Fatalf("post-removal step %q touched the returned app: %#v", forbidden, r.calls)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	(&App{Out: &out, Err: &errOut}).printUninstallSummary(summary, false, true)
+	if !strings.Contains(out.String(), "kept everything not yet removed because "+appPath+" reappeared") {
+		t.Fatalf("summary did not explain the kept data: %q", out.String())
+	}
+}
+
 func TestUninstallAppSkipsRelatedFilesWhenBundleMoveFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1961,12 +2220,66 @@ func TestRemoveAppsFromDockMatchesBundleIDAcrossDockArrays(t *testing.T) {
 		"/usr/libexec/PlistBuddy -c Delete :persistent-others:0 " + dockPath:                                 {},
 	}}
 
-	removeAppsFromDock(context.Background(), r, []AppEntry{{Path: "/Applications/Foo.app", BundleID: "com.example.foo"}})
+	removeAppsFromDock(context.Background(), r, []AppEntry{{Path: filepath.Join(home, "Applications", "Foo.app"), BundleID: "com.example.foo"}})
 	if !runnerCallContains(r.calls, "Delete :persistent-others:0") {
 		t.Fatalf("dock tile was not deleted by bundle id; calls = %#v", r.calls)
 	}
 	if !runnerCallContains(r.calls, "/usr/bin/killall Dock") {
 		t.Fatalf("Dock was not restarted after deletion; calls = %#v", r.calls)
+	}
+}
+
+func TestRemoveAppsFromDockKeepsTilesOfAppsBackAtTheirPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// An updater put the app back while the rest of the batch ran.
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+	dockPath := dockPlistPath()
+	r := &recordingRunner{outputs: map[string]CommandOutput{
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps " + dockPath:                                    {Stdout: "Dict {\n}\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps:0:tile-data:file-data:_CFURLString " + dockPath: {Stdout: "file://" + appPath + "/\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps:0:tile-data:bundle-identifier " + dockPath:      {Stdout: "com.example.foo\n"},
+		"/usr/libexec/PlistBuddy -c Delete :persistent-apps:0 " + dockPath:                                 {},
+	}}
+
+	kept := removeAppsFromDock(context.Background(), r, []AppEntry{{Path: appPath, BundleID: "com.example.foo"}})
+	if runnerCallContains(r.calls, "Delete :") || runnerCallContains(r.calls, "/usr/bin/killall Dock") {
+		t.Fatalf("Dock lost the tile of an app back at its path: %#v", r.calls)
+	}
+	if len(kept) != 1 || !errors.Is(kept[0], errAppPathOccupied) {
+		t.Fatalf("kept = %#v, want the app's return reported", kept)
+	}
+}
+
+func TestRemoveAppsFromDockRechecksTheAppPathBeforeEachDeletion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	dockPath := dockPlistPath()
+	inner := &recordingRunner{outputs: map[string]CommandOutput{
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps " + dockPath:                               {Stdout: "Dict {\n}\nDict {\n}\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps:1:tile-data:bundle-identifier " + dockPath: {Stdout: "com.example.foo\n"},
+		"/usr/libexec/PlistBuddy -c Print :persistent-apps:0:tile-data:bundle-identifier " + dockPath: {Stdout: "com.example.foo\n"},
+		"/usr/libexec/PlistBuddy -c Delete :persistent-apps:1 " + dockPath:                            {},
+		"/usr/libexec/PlistBuddy -c Delete :persistent-apps:0 " + dockPath:                            {},
+	}}
+	r := commandHookRunner{Runner: inner, before: func(name string, args []string) {
+		if strings.Join(args, " ") == "-c Print :persistent-apps:0:tile-data:bundle-identifier "+dockPath {
+			// The app comes back while its second tile is being read.
+			writeTestInfoPlist(t, appPath, "com.example.foo", "foo")
+		}
+	}}
+
+	kept := removeAppsFromDock(context.Background(), r, []AppEntry{{Path: appPath, BundleID: "com.example.foo"}})
+	if !runnerCallContains(inner.calls, "Delete :persistent-apps:1") {
+		t.Fatalf("the tile matched before the return was not removed: %#v", inner.calls)
+	}
+	if runnerCallContains(inner.calls, "Delete :persistent-apps:0") {
+		t.Fatalf("a tile was removed after the app came back: %#v", inner.calls)
+	}
+	if len(kept) != 1 || !errors.Is(kept[0], errAppPathOccupied) {
+		t.Fatalf("kept = %#v, want the app's return reported", kept)
 	}
 }
 

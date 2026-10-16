@@ -21,6 +21,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Never clean Google's `GIPPseudonymousID` identity store or `CCTClearcutLogger` queue under `~/Library/Caches`; removing them while Gemini runs made it rewrite data to disk in an unbounded loop.
 - Stop cleaning `~/.gitconfig.lock`, and protect `~/.gitconfig.bak*`: Git holds the lock while it writes the config and renames it into place, so moving it to Trash mid-write could lose that change, and a backup can be the only copy of earlier settings.
 - Stop `bm uninstall` from claiming every Electron app's crash reports when the selected app's executable is still named `Electron`, and from treating another running Electron app as the selected one. Crash reports fall back to the app's name, and process checks count only processes inside the selected bundle.
+- Keep an app's remaining data, Login Item, LaunchServices record, and Dock tile when an updater or a quick reinstall puts the app back after `bm uninstall` moved its bundle to Trash. The app path is checked again before each later step, including Trash retries and the Dock cleanup at the end of a batch, and a path that cannot be checked keeps them as well.
 
 ## v0.6.26 - 2026-09-07
 
