@@ -1375,6 +1375,55 @@ func TestRunCleanLeavesGitConfigLockAndBackups(t *testing.T) {
 	}
 }
 
+func TestCleanWhitelistRowsProtectMacOSPipAndYarnCaches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	caches := filepath.Join(home, "Library", "Caches")
+	rows := map[string]string{
+		"~/Library/Caches/pip/*":  filepath.Join(caches, "pip", "http", "entry"),
+		"~/Library/Caches/Yarn/*": filepath.Join(caches, "Yarn", "v6", "entry"),
+	}
+	control := filepath.Join(caches, "DropApp", "entry")
+	for _, path := range append([]string{control}, rows["~/Library/Caches/pip/*"], rows["~/Library/Caches/Yarn/*"]) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	offered := map[string]bool{}
+	for _, item := range CleanWhitelistItems() {
+		offered[item.Pattern] = true
+	}
+
+	unprotected := DefaultConfig()
+	unprotected.Clean.Whitelist = nil
+	idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	baseline := RunClean(context.Background(), CleanOptions{DryRun: true, Config: unprotected, Runner: idle})
+	for row, path := range rows {
+		if !offered[row] {
+			t.Fatalf("whitelist menu does not offer %q", row)
+		}
+		if !cleanResultCovers(baseline, path) {
+			t.Fatalf("without a whitelist, clean does not reach %q: %#v", path, baseline.Targets)
+		}
+
+		cfg := DefaultConfig()
+		cfg.Clean.Whitelist = nil
+		if err := SetCleanWhitelist(&cfg, []string{row}); err != nil {
+			t.Fatal(err)
+		}
+		res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: idle})
+		if cleanResultCovers(res, path) {
+			t.Fatalf("ticking %q left %q cleanable: %#v", row, path, res.Targets)
+		}
+		if !cleanResultCovers(res, control) {
+			t.Fatalf("ticking %q also protected unrelated caches: %#v", row, res.Targets)
+		}
+	}
+}
+
 func TestRunCleanKeepsDiagnosticReportsDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

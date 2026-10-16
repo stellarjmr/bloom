@@ -175,12 +175,16 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "CocoaPods cache (iOS dependencies)", Pattern: "~/Library/Caches/CocoaPods/*", Category: "package_manager"},
 		{Label: "npm package cache", Pattern: "~/.npm/_cacache/*", Category: "package_manager"},
 		{Label: "pip Python package cache", Pattern: "~/.cache/pip/*", Category: "package_manager"},
+		// pip and Yarn v1 keep their macOS caches under ~/Library/Caches, which
+		// the User app cache rule sweeps; a row is the only way to protect them.
+		{Label: "pip Python package cache (Library/Caches)", Pattern: "~/Library/Caches/pip/*", Category: "package_manager"},
 		{Label: "uv Python package cache", Pattern: "~/.cache/uv/*", Category: "package_manager"},
 		{Label: "Poetry artifacts cache", Pattern: "~/Library/Caches/pypoetry/artifacts/*", Category: "package_manager"},
 		{Label: "Poetry package cache", Pattern: "~/Library/Caches/pypoetry/cache/*", Category: "package_manager"},
 		{Label: "tealdeer tldr pages cache", Pattern: "~/Library/Caches/tealdeer/tldr-pages", Category: "package_manager"},
 		{Label: "Homebrew downloaded packages", Pattern: "~/Library/Caches/Homebrew/*", Category: "package_manager"},
 		{Label: "Yarn package manager cache", Pattern: "~/.cache/yarn/*", Category: "package_manager"},
+		{Label: "Yarn v1 package cache (Library/Caches)", Pattern: "~/Library/Caches/Yarn/*", Category: "package_manager"},
 		{Label: "pnpm package store", Pattern: "~/Library/pnpm/store/*", Category: "package_manager"},
 		{Label: "pnpm package store (mise/XDG)", Pattern: "~/.local/share/pnpm/store/*", Category: "package_manager"},
 		{Label: "Composer PHP dependencies cache (legacy)", Pattern: "~/.composer/cache/*", Category: "package_manager"},

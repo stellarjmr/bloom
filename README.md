@@ -76,7 +76,7 @@ Google's `~/Library/Caches/GIPPseudonymousID` identity store and `~/Library/Cach
 
 Crash reports inside `~/Library/Logs/DiagnosticReports` are cleanable, but the directory itself stays: macOS's crash reporter cannot recreate it under its sandbox and would silently stop saving later reports.
 
-The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.
+The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. The pip and Yarn v1 rows include the macOS cache locations those tools actually use under `~/Library/Caches`. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.
 
 Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets only redundant Cargo registry archives and Rustup downloads. Registry sources and indexes, Cargo git state, installed binaries, toolchains, and toolchain documentation stay untouched; active Rust builds and cache roots that escape their selected tool home are skipped.
 
