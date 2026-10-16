@@ -18,6 +18,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Stop with a config error instead of loading defaults when the config path is a broken symlink or runs through a broken directory link, so `bm clean` never runs without the user's whitelist when a dotfiles link or its volume is unavailable.
 - Escape control characters in clean and uninstall logs and in `bm history` output, so a crafted filename can no longer forge a successful cleanup record or send terminal control sequences. Rows written by older versions are escaped when displayed, and backslashes stay literal.
 - Keep the `~/Library/Logs/DiagnosticReports` directory during `bm clean` and clean only the reports inside it; moving the directory to Trash stopped macOS from saving later crash reports.
+- Never clean Google's `GIPPseudonymousID` identity store or `CCTClearcutLogger` queue under `~/Library/Caches`; removing them while Gemini runs made it rewrite data to disk in an unbounded loop.
 
 ## v0.6.26 - 2026-09-07
 

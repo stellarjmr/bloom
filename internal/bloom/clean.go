@@ -1842,6 +1842,14 @@ var protectedCleanPathPatterns = []string{
 	"*/Library/Caches/com.apple.WorkflowKit.BackgroundShortcutRunner.ShortcutsSandboxCache/*",
 	"*/Library/Caches/com.apple.siriactionsd.ShortcutsSandboxCache",
 	"*/Library/Caches/com.apple.siriactionsd.ShortcutsSandboxCache/*",
+	// Google's pseudonymous ID store and the Clearcut log queue that Chrome,
+	// Drive, and the updater share. Their names carry no bundle ID for the
+	// owner-process gate, and deleting them while Gemini runs starts an
+	// unbounded disk write loop.
+	"*/Library/Caches/GIPPseudonymousID",
+	"*/Library/Caches/GIPPseudonymousID/*",
+	"*/Library/Caches/CCTClearcutLogger",
+	"*/Library/Caches/CCTClearcutLogger/*",
 	"*com.apple.coreaudio*",
 	"*com.apple.audio.*",
 	"*coreaudiod*",

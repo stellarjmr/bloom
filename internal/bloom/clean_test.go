@@ -1313,6 +1313,41 @@ func TestRunCleanNeverTargetsDotConfig(t *testing.T) {
 	}
 }
 
+func TestRunCleanKeepsGoogleIdentityAndClearcutState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	caches := filepath.Join(home, "Library", "Caches")
+	protected := []string{
+		filepath.Join(caches, "GIPPseudonymousID"),
+		filepath.Join(caches, "CCTClearcutLogger"),
+	}
+	control := filepath.Join(caches, "DropApp")
+	for _, dir := range append(append([]string{}, protected...), control) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "state"), []byte("state"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: idle})
+	if !cleanResultContains(res, control) {
+		t.Fatalf("control cache missing from dry run: %#v", res.Targets)
+	}
+	for _, dir := range protected {
+		if cleanResultCovers(res, filepath.Join(dir, "state")) {
+			t.Fatalf("Google state %q was targeted: %#v", dir, res.Targets)
+		}
+		if err := validateCleanPath(filepath.Join(dir, "state")); err == nil {
+			t.Fatalf("validateCleanPath accepted a file inside %q", dir)
+		}
+	}
+}
+
 func TestRunCleanKeepsDiagnosticReportsDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
