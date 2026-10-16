@@ -872,16 +872,34 @@ func matchDiagnosticReports(app AppEntry, out *[]string) {
 	}
 }
 
+// isSharedRuntimeExecutable reports whether name is a runtime executable that
+// many apps ship unrenamed. Every such Electron app reports crashes as
+// Electron-*.ips and runs as a process named Electron, so the name identifies
+// no particular app.
+func isSharedRuntimeExecutable(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "electron")
+}
+
+// identifyingBundleExecutable returns the bundle executable unless it is a
+// shared runtime name; callers then fall back to the app's own name.
+func identifyingBundleExecutable(appPath string) string {
+	if executable := readBundleExecutable(appPath); !isSharedRuntimeExecutable(executable) {
+		return executable
+	}
+	return ""
+}
+
 func diagnosticReportPrefixes(app AppEntry) []string {
 	values := []string{
-		readBundleExecutable(app.Path),
+		identifyingBundleExecutable(app.Path),
 		strings.ReplaceAll(app.Name, " ", ""),
 	}
 	prefixes := []string{}
 	seen := map[string]bool{}
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if len(value) < 2 {
+		// The Electron runtime app itself has no reports of its own to claim.
+		if len(value) < 2 || isSharedRuntimeExecutable(value) {
 			continue
 		}
 		value = strings.ToLower(value)
@@ -935,13 +953,13 @@ func crashReporterPrefixes(app AppEntry) []string {
 	values := []string{
 		app.Name,
 		strings.ReplaceAll(app.Name, " ", ""),
-		readBundleExecutable(app.Path),
+		identifyingBundleExecutable(app.Path),
 	}
 	prefixes := []string{}
 	seen := map[string]bool{}
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if len(value) < 3 {
+		if len(value) < 3 || isSharedRuntimeExecutable(value) {
 			continue
 		}
 		value = strings.ToLower(value)
@@ -1512,12 +1530,12 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 		matchName = app.Name
 	}
 
-	running := processRunning(ctx, runner, matchName)
+	running := appProcessRunning(ctx, runner, app, matchName)
 	if running {
 		if script := quitAppScript(app); script != "" {
 			_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
 		}
-		running = !waitForProcessExit(ctx, runner, matchName, stopAppQuitPolls)
+		running = !waitForAppProcessExit(ctx, runner, app, matchName, stopAppQuitPolls)
 	}
 
 	unloadMatchingLaunchAgents(ctx, runner, app)
@@ -1526,6 +1544,25 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 		running = !forceQuitAppProcesses(ctx, runner, app, matchName)
 	}
 	return running
+}
+
+// appProcessRunning reports whether the app is running. A distinctive
+// executable name counts every process with that name, which also notices a
+// translocated copy. A shared runtime name such as Electron belongs to every
+// unrenamed Electron app, so only processes whose executable lies inside the
+// selected bundle count.
+func appProcessRunning(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
+	if isSharedRuntimeExecutable(matchName) {
+		return len(matchingAppProcessIDs(ctx, runner, app, matchName)) > 0
+	}
+	return processRunning(ctx, runner, matchName)
+}
+
+func waitForAppProcessExit(ctx context.Context, runner Runner, app AppEntry, matchName string, polls int) bool {
+	if isSharedRuntimeExecutable(matchName) {
+		return waitForMatchedAppProcessesExit(ctx, runner, app, matchName, polls)
+	}
+	return waitForProcessExit(ctx, runner, matchName, polls)
 }
 
 // unloadMatchingLaunchAgents unloads only agents the app owns, so a sibling
@@ -1560,7 +1597,7 @@ func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry
 func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
 	processes := matchingAppProcessRecords(ctx, runner, app, matchName)
 	if len(processes) == 0 {
-		return !processRunning(ctx, runner, matchName)
+		return !appProcessRunning(ctx, runner, app, matchName)
 	}
 	terminated := make([]matchedAppProcess, 0, len(processes))
 	for _, process := range processes {
@@ -1569,7 +1606,7 @@ func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, mat
 		}
 	}
 	if len(terminated) == 0 {
-		return !processRunning(ctx, runner, matchName)
+		return !appProcessRunning(ctx, runner, app, matchName)
 	}
 	if waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls) {
 		return true

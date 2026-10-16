@@ -646,6 +646,86 @@ func TestFindRelatedPathsIncludesCrashReporterPlists(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsIgnoresSharedElectronRuntimeName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	reports := filepath.Join(home, "Library", "Logs", "DiagnosticReports")
+	crashReporter := filepath.Join(home, "Library", "Application Support", "CrashReporter")
+	owned := []string{
+		filepath.Join(reports, "FooApp-2026-10-15-101010.ips"),
+		filepath.Join(crashReporter, "Foo App_AAAA-BBBB.plist"),
+	}
+	foreign := []string{
+		filepath.Join(reports, "Electron-2026-10-15-101010.ips"),
+		filepath.Join(reports, "Electron_2026-10-15-101010.crash"),
+		filepath.Join(crashReporter, "Electron_CCCC-DDDD.plist"),
+	}
+	for _, path := range append(append([]string{}, owned...), foreign...) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("report"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appPath := filepath.Join(home, "Applications", "Foo App.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Electron")
+	paths := FindRelatedPaths(AppEntry{Path: appPath, Name: "Foo App", BundleID: "com.example.foo"})
+	for _, path := range owned {
+		if !containsString(paths, path) {
+			t.Fatalf("app-name crash report %q missing: %#v", path, paths)
+		}
+	}
+	runtimePath := filepath.Join(home, "Applications", "Electron.app")
+	writeTestInfoPlist(t, runtimePath, "com.github.Electron", "Electron")
+	runtime := FindRelatedPaths(AppEntry{Path: runtimePath, Name: "Electron", BundleID: "com.github.Electron"})
+	for _, path := range foreign {
+		if containsString(paths, path) || containsString(runtime, path) {
+			t.Fatalf("shared Electron crash report %q was claimed:\napp=%#v\nruntime=%#v", path, paths, runtime)
+		}
+	}
+}
+
+func TestStopAppIgnoresOtherAppsSharingTheElectronRuntimeName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldPoll := stopAppPollInterval
+	stopAppPollInterval = 0
+	t.Cleanup(func() { stopAppPollInterval = oldPoll })
+	appPath := filepath.Join(home, "Applications", "Foo.app")
+	writeTestInfoPlist(t, appPath, "com.example.foo", "Electron")
+	other := "/Applications/Other.app/Contents/MacOS/Electron"
+
+	idle := &processRunner{
+		pids:         map[string][]string{"Electron": {"200"}},
+		processPaths: map[string]string{"200": other},
+	}
+	if stopApp(context.Background(), idle, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}) {
+		t.Fatalf("another Electron app made the idle selection look running: %#v", idle.calls)
+	}
+	if runnerCallContains(idle.calls, "/usr/bin/osascript") || runnerCallContains(idle.calls, "/bin/kill") {
+		t.Fatalf("idle Electron app was asked to quit or signaled: %#v", idle.calls)
+	}
+
+	busy := &processRunner{
+		pids: map[string][]string{"Electron": {"200", "300"}},
+		processPaths: map[string]string{
+			"200": other,
+			"300": filepath.Join(appPath, "Contents", "MacOS", "Electron"),
+		},
+	}
+	if stopApp(context.Background(), busy, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}) {
+		t.Fatalf("selected Electron app still reported running after TERM: %#v", busy.calls)
+	}
+	if !runnerCallContains(busy.calls, `tell application id "com.example.foo" to quit`) || !runnerCallContains(busy.calls, "/bin/kill -TERM 300") {
+		t.Fatalf("selected Electron app was not quit and terminated: %#v", busy.calls)
+	}
+	if runnerCallContains(busy.calls, "/bin/kill -TERM 200") || runnerCallContains(busy.calls, "/bin/kill -KILL 200") {
+		t.Fatalf("another Electron app was signaled: %#v", busy.calls)
+	}
+}
+
 func TestFindRelatedPathsIncludesVSCodeStablePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
