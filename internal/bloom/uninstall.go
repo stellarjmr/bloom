@@ -512,7 +512,6 @@ func FindRelatedPaths(app AppEntry) []string {
 		return []string{app.Path}
 	}
 
-	nameToken := leftoverNameToken(app)
 	paths := []string{app.Path}
 	add := func(p string) {
 		if p == "" {
@@ -525,12 +524,7 @@ func FindRelatedPaths(app AppEntry) []string {
 		if app.BundleID != "" {
 			matchBundleIDInDir(root, app.BundleID, &paths)
 		}
-		if nameToken == "" || strings.EqualFold(nameToken, app.BundleID) {
-			continue
-		}
-		var nameMatched []string
-		matchInDir(root, nameToken, &nameMatched)
-		for _, p := range nameMatched {
+		for _, p := range matchLiteralNamesInDir(root, displayNameLeftoverNames(home, root, app)) {
 			if nameTokenLeftoverAllowed(p, app) {
 				paths = append(paths, p)
 			}
@@ -654,15 +648,73 @@ func pathReferenceBoundaryAfter(s string, idx int) bool {
 	return r == '/' || unicode.IsSpace(r) || strings.ContainsRune("\"'<):;", r)
 }
 
-// leftoverNameToken returns the app display name for fuzzy leftover matching
-// in shared ~/Library roots, or "" when the name is too short to identify the
-// app's data without hitting unrelated entries.
+// leftoverNameToken returns the app bundle name used for literal leftover
+// names in shared ~/Library roots, or "" when the name is too short to
+// identify the app's data without hitting unrelated entries.
 func leftoverNameToken(app AppEntry) string {
 	name := strings.TrimSpace(app.Name)
 	if utf8.RuneCountInString(name) < 3 {
 		return ""
 	}
 	return name
+}
+
+// displayNameLeftoverNames returns the literal entry names root may hold for
+// the app's name. Only Application Support, Caches, Logs, and Saved
+// Application State are keyed by name. Containers, Group Containers,
+// Application Scripts, HTTPStorages, and WebKit are keyed by bundle ID; a
+// name token there is usually a vendor or another product's ID component.
+// A name that merely starts or contains the app's name ("Telegram Desktop"
+// for "Telegram") belongs to another product and is never derived here.
+func displayNameLeftoverNames(home, root string, app AppEntry) []string {
+	name := leftoverNameToken(app)
+	if name == "" {
+		return nil
+	}
+	compact := []string{name}
+	spaced := strings.Contains(name, " ")
+	if spaced {
+		compact = append(compact, strings.ReplaceAll(name, " ", ""))
+	}
+	library := filepath.Join(home, "Library")
+	switch filepath.Clean(root) {
+	case filepath.Join(library, "Application Support"):
+		if !spaced {
+			return compact
+		}
+		return append(compact, strings.ReplaceAll(name, " ", "_"), strings.ReplaceAll(name, " ", "-"))
+	case filepath.Join(library, "Caches"), filepath.Join(library, "Logs"):
+		return compact
+	case filepath.Join(library, "Saved Application State"):
+		states := make([]string, 0, len(compact))
+		for _, variant := range compact {
+			states = append(states, variant+".savedState")
+		}
+		return states
+	}
+	return nil
+}
+
+// matchLiteralNamesInDir returns entries of dir whose names equal one of
+// names, compared case-insensitively like the default APFS volume.
+func matchLiteralNamesInDir(dir string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		for _, name := range names {
+			if strings.EqualFold(entry.Name(), name) {
+				out = append(out, filepath.Join(dir, entry.Name()))
+				break
+			}
+		}
+	}
+	return out
 }
 
 // bundleLeafDataDirVariants derives narrowly evidenced literal data-directory
@@ -749,9 +801,9 @@ func matchBundleLeafExactPaths(home string, app AppEntry, out *[]string) {
 	}
 }
 
-// nameTokenLeftoverAllowed guards fuzzy display-name matches against trashing
-// data that belongs to a different app or to protected user data. Bundle-ID
-// matches are precise and do not pass through this check.
+// nameTokenLeftoverAllowed guards literal name-variant matches against
+// trashing data that belongs to a different app or to protected user data.
+// Bundle-ID matches are precise and do not pass through this check.
 func nameTokenLeftoverAllowed(path string, app AppEntry) bool {
 	if isVSCodeDataDir(path) && !isVSCodeStableApp(app) && !isVSCodeInsidersApp(app) {
 		return false
@@ -810,72 +862,6 @@ func matchVSCodePaths(app AppEntry, out *[]string) {
 	add(filepath.Join(home, "Library", "Application Support", "Code"))
 	add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode"))
 	add(filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode.ShipIt"))
-}
-
-// matchInDir scans dir for entries containing token on filename boundaries
-// (case-insensitive) and appends matching absolute paths.
-func matchInDir(dir, token string, out *[]string) {
-	if token == "" {
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "." || name == ".." {
-			continue
-		}
-		if nameContainsTokenOnBoundary(name, token) {
-			*out = append(*out, filepath.Join(dir, name))
-		}
-	}
-}
-
-func nameContainsTokenOnBoundary(name, token string) bool {
-	if token == "" {
-		return false
-	}
-	name = strings.ToLower(name)
-	token = strings.ToLower(token)
-	for start := 0; start < len(name); {
-		idx := strings.Index(name[start:], token)
-		if idx < 0 {
-			return false
-		}
-		idx += start
-		end := idx + len(token)
-		if tokenBoundaryBefore(name, idx) && tokenBoundaryAfter(name, end) {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(name[idx:])
-		if size <= 0 {
-			return false
-		}
-		start = idx + size
-	}
-	return false
-}
-
-func tokenBoundaryBefore(s string, idx int) bool {
-	if idx <= 0 {
-		return true
-	}
-	r, _ := utf8.DecodeLastRuneInString(s[:idx])
-	return isTokenBoundary(r)
-}
-
-func tokenBoundaryAfter(s string, idx int) bool {
-	if idx >= len(s) {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(s[idx:])
-	return isTokenBoundary(r)
-}
-
-func isTokenBoundary(r rune) bool {
-	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
 // matchBundleIDInDir appends entries of dir whose names carry bundleID as a

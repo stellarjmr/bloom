@@ -13,6 +13,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 ### Fixed
 
 - Stop `bm uninstall` from claiming other apps' Group Containers and bundle-ID data: a leftover must carry the app's complete bundle ID on dot boundaries, so vendor-shared containers such as Microsoft's OneAuth, Entra, Defender, and Office shared containers, or Podcasts' container for TestFlight, are no longer removed together with one product.
+- Match `bm uninstall` name-based leftovers literally: the bundle name and its no-space, underscore, and hyphen spellings count only in Application Support, Caches, Logs, and Saved Application State, so another product whose name extends the app's (for example `Telegram Desktop` for `Telegram`) or whose bundle ID shares the app's vendor component is no longer removed.
 
 ## v0.6.26 - 2026-09-07
 

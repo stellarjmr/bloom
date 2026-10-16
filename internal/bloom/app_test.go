@@ -831,6 +831,100 @@ func TestFindRelatedPathsNameMatchesSkipProtectedData(t *testing.T) {
 	}
 }
 
+func TestFindRelatedPathsMatchesNameLeftoversLiterally(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	library := filepath.Join(home, "Library")
+	mkdirs := func(paths ...string) {
+		t.Helper()
+		for _, path := range paths {
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	telegramOwned := []string{
+		filepath.Join(library, "Application Support", "Telegram"),
+		filepath.Join(library, "Caches", "telegram"),
+	}
+	otherProducts := []string{
+		filepath.Join(library, "Application Support", "Telegram Desktop"),
+		filepath.Join(library, "Caches", "Telegram-updater"),
+		filepath.Join(library, "Logs", "Telegram Helper"),
+		filepath.Join(library, "Containers", "org.telegram.desktop"),
+		filepath.Join(library, "HTTPStorages", "org.telegram.desktop"),
+		filepath.Join(library, "Application Scripts", "TEAM.org.telegram.share"),
+	}
+	mkdirs(append(append([]string{}, telegramOwned...), otherProducts...)...)
+	telegram := FindRelatedPaths(AppEntry{
+		Path:     filepath.Join(home, "Applications", "Telegram.app"),
+		Name:     "Telegram",
+		BundleID: "ru.keepcoder.Telegram",
+	})
+	for _, path := range telegramOwned {
+		if !containsString(telegram, path) {
+			t.Fatalf("Telegram plan missing literal name leftover %q: %#v", path, telegram)
+		}
+	}
+	for _, path := range otherProducts {
+		if containsString(telegram, path) {
+			t.Fatalf("Telegram plan claimed another product's data %q: %#v", path, telegram)
+		}
+	}
+
+	variants := []string{
+		filepath.Join(library, "Application Support", "Mac Mouse Fix"),
+		filepath.Join(library, "Application Support", "MacMouseFix"),
+		filepath.Join(library, "Application Support", "Mac_Mouse_Fix"),
+		filepath.Join(library, "Application Support", "Mac-Mouse-Fix"),
+		filepath.Join(library, "Caches", "MacMouseFix"),
+		filepath.Join(library, "Logs", "Mac Mouse Fix"),
+		filepath.Join(library, "Saved Application State", "MacMouseFix.savedState"),
+	}
+	notVariants := []string{
+		filepath.Join(library, "Application Support", "Mac Mouse Fix 2"),
+		filepath.Join(library, "Caches", "Mac-Mouse-Fix"),
+		filepath.Join(library, "Saved Application State", "Mac Mouse Fix Helper.savedState"),
+	}
+	mkdirs(append(append([]string{}, variants...), notVariants...)...)
+	mouse := FindRelatedPaths(AppEntry{
+		Path:     filepath.Join(home, "Applications", "Mac Mouse Fix.app"),
+		Name:     "Mac Mouse Fix",
+		BundleID: "com.nuebling.mac-mouse-fix",
+	})
+	for _, path := range variants {
+		if !containsString(mouse, path) {
+			t.Fatalf("Mac Mouse Fix plan missing name variant %q: %#v", path, mouse)
+		}
+	}
+	for _, path := range notVariants {
+		if containsString(mouse, path) {
+			t.Fatalf("Mac Mouse Fix plan claimed non-variant %q: %#v", path, mouse)
+		}
+	}
+
+	vendorSiblings := []string{
+		filepath.Join(library, "Containers", "org.lattiva.polish-ui"),
+		filepath.Join(library, "Application Scripts", "org.lattiva.polish-ui"),
+	}
+	owned := filepath.Join(library, "Containers", "org.lattiva.viewer")
+	mkdirs(append(append([]string{}, vendorSiblings...), owned)...)
+	lattiva := FindRelatedPaths(AppEntry{
+		Path:     filepath.Join(home, "Applications", "Lattiva.app"),
+		Name:     "Lattiva",
+		BundleID: "org.lattiva.viewer",
+	})
+	if !containsString(lattiva, owned) {
+		t.Fatalf("Lattiva plan missing its bundle-ID container: %#v", lattiva)
+	}
+	for _, path := range vendorSiblings {
+		if containsString(lattiva, path) {
+			t.Fatalf("app name matched a vendor component of another bundle ID %q: %#v", path, lattiva)
+		}
+	}
+}
+
 func TestFindRelatedPathsIncludesEmbeddedHelperLeftovers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
