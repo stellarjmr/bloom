@@ -17,6 +17,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Unload and remove only the LaunchAgents an uninstalled app owns: an agent must be named `<bundleID>.plist` or start an executable inside the selected bundle. Another product's agent that only watches or mentions the app, such as Riot Client's install checker for League of Legends, and a sibling channel's agent stay loaded, and a plist replaced or rewritten after planning is kept.
 - Stop with a config error instead of loading defaults when the config path is a broken symlink or runs through a broken directory link, so `bm clean` never runs without the user's whitelist when a dotfiles link or its volume is unavailable.
 - Escape control characters in clean and uninstall logs and in `bm history` output, so a crafted filename can no longer forge a successful cleanup record or send terminal control sequences. Rows written by older versions are escaped when displayed, and backslashes stay literal.
+- Keep the `~/Library/Logs/DiagnosticReports` directory during `bm clean` and clean only the reports inside it; moving the directory to Trash stopped macOS from saving later crash reports.
 
 ## v0.6.26 - 2026-09-07
 

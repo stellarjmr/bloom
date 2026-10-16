@@ -1313,6 +1313,50 @@ func TestRunCleanNeverTargetsDotConfig(t *testing.T) {
 	}
 }
 
+func TestRunCleanKeepsDiagnosticReportsDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	reports := filepath.Join(home, "Library", "Logs", "DiagnosticReports")
+	report := filepath.Join(reports, "Foo-2026-10-06-101010.ips")
+	retired := filepath.Join(reports, "Retired", "Bar-2026-09-01-090909.ips")
+	appLogs := filepath.Join(home, "Library", "Logs", "FooApp")
+	for _, path := range []string{report, retired, filepath.Join(appLogs, "foo.log")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("log"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	dry := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: idle})
+	if cleanResultContains(dry, reports) {
+		t.Fatalf("dry run targets the DiagnosticReports directory itself: %#v", dry.Targets)
+	}
+	for _, path := range []string{report, filepath.Dir(retired), appLogs} {
+		if !cleanResultContains(dry, path) {
+			t.Fatalf("dry run missing %q: %#v", path, dry.Targets)
+		}
+	}
+
+	res := RunClean(context.Background(), CleanOptions{Config: cfg, Runner: idle})
+	if len(res.Failed) > 0 {
+		t.Fatalf("clean failed: %#v", res.Failed)
+	}
+	if info, err := os.Lstat(reports); err != nil || !info.IsDir() {
+		t.Fatalf("DiagnosticReports directory was removed: %v", err)
+	}
+	for _, path := range []string{report, filepath.Dir(retired), appLogs} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("%q was not moved to Trash: %v", path, err)
+		}
+	}
+}
+
 func TestRunCleanMovesToTrashWithoutPermanentDelete(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

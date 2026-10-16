@@ -1719,6 +1719,10 @@ var protectedCleanPathPatterns = []string{
 	"*com.apple.dock*",
 	"*/Library/Preferences/com.apple.dock.plist",
 	"*/Library/Preferences/com.apple.finder.plist",
+	// The crash-report helper cannot recreate this directory under its
+	// sandbox, so removing it silently disables crash reporting. Only the
+	// directory itself is protected; the reports inside stay cleanable.
+	"*/Library/Logs/DiagnosticReports",
 	"*/Library/Logs/bloom",
 	"*/Library/Logs/bloom/*",
 	"*/Library/Logs/mole",
