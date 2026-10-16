@@ -2070,7 +2070,10 @@ func logCleanOperation(mode, sizeKB, status, target string) {
 		return
 	}
 	defer f.Close()
-	_, _ = fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\n", time.Now().Format("2006-01-02T15:04:05-0700"), mode, sizeKB, status, target)
+	// A rejected target can hold any byte, so every field is escaped: a
+	// filename must never forge a history record or reach the terminal raw.
+	_, _ = fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\n", time.Now().Format(historyTimestampLayout),
+		escapeLogField(mode), escapeLogField(sizeKB), escapeLogField(status), escapeLogField(target))
 }
 
 func cleanLogSize(sizeKB int64) string {

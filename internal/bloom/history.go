@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const historyTimestampLayout = "2006-01-02T15:04:05-0700"
@@ -125,13 +127,15 @@ func parseCleanHistoryLine(line string, seq int) (historyEntry, bool) {
 	if !ok {
 		return historyEntry{}, false
 	}
-	action := cleanHistoryAction(parts[3])
+	// Rows written before escaping existed may still hold raw control bytes;
+	// every printed field is escaped again, which leaves newer rows unchanged.
+	action := escapeLogField(cleanHistoryAction(parts[3]))
 	size := historySize(parts[2])
 	fields := []string{formatHistoryTime(when), "clean", action}
 	if size != "" {
 		fields = append(fields, size)
 	}
-	fields = append(fields, parts[4])
+	fields = append(fields, escapeLogField(parts[4]))
 	return historyEntry{when: when, seq: seq, line: strings.Join(fields, "  ")}, true
 }
 
@@ -144,14 +148,14 @@ func parseUninstallHistoryLine(line string, seq int) (historyEntry, bool) {
 	if !ok {
 		return historyEntry{}, false
 	}
-	appName := parts[2]
+	appName := escapeLogField(parts[2])
 	if strings.TrimSpace(appName) == "" {
 		appName = "unknown app"
 	}
-	event := parts[3]
-	status := parts[4]
+	event := escapeLogField(parts[3])
+	status := escapeLogField(parts[4])
 	size := historySize(parts[5])
-	value := parts[6]
+	value := escapeLogField(parts[6])
 
 	header := strings.Join([]string{formatHistoryTime(when), "uninstall", appName}, "  ")
 	detail := ""
@@ -261,17 +265,52 @@ func logUninstallEvent(appName, event, status, sizeKB, value string) {
 	defer f.Close()
 	_, _ = fmt.Fprintf(f, "%s\tuninstall\t%s\t%s\t%s\t%s\t%s\n",
 		time.Now().Format(historyTimestampLayout),
-		historyLogField(appName),
-		historyLogField(event),
-		historyLogField(status),
-		historyLogField(sizeKB),
-		historyLogField(value),
+		escapeLogField(appName),
+		escapeLogField(event),
+		escapeLogField(status),
+		escapeLogField(sizeKB),
+		escapeLogField(value),
 	)
 }
 
-func historyLogField(value string) string {
-	replacer := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ")
-	return replacer.Replace(value)
+// escapeLogField spells control characters in a logged value as \n, \r, \t,
+// or \xHH, so a crafted filename can neither start another history record
+// nor send terminal control sequences when history is printed. That covers
+// C0, DEL, C1, and invalid UTF-8 bytes. Backslashes stay literal so a name
+// reads back exactly as it is on disk. Only the logged copy changes, never
+// the path an action uses. The escape is idempotent, so history applies it
+// again to rows written before escaping existed.
+func escapeLogField(value string) string {
+	clean := true
+	for _, r := range value {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return value
+	}
+	var b strings.Builder
+	for i := 0; i < len(value); {
+		r, size := utf8.DecodeRuneInString(value[i:])
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case (r == utf8.RuneError && size <= 1) || unicode.IsControl(r):
+			for _, octet := range []byte(value[i : i+size]) {
+				fmt.Fprintf(&b, `\x%02x`, octet)
+			}
+		default:
+			b.WriteString(value[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 func bloomLogFile(home, name string) string {

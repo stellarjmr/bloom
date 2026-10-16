@@ -114,7 +114,7 @@ Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear
 
 ## History
 
-`bm history` shows recent clean and uninstall activity from `~/Library/Logs/bloom`. Clean history reuses Bloom's clean log; uninstall history groups confirmed uninstall commands, Bloom-moved paths, and failed paths by operation for readability. Dry-run plans are not written to the uninstall history, and `--limit` limits the underlying history events before grouping.
+`bm history` shows recent clean and uninstall activity from `~/Library/Logs/bloom`. Clean history reuses Bloom's clean log; uninstall history groups confirmed uninstall commands, Bloom-moved paths, and failed paths by operation for readability. Dry-run plans are not written to the uninstall history, and `--limit` limits the underlying history events before grouping. Logged names spell control characters as `\n`, `\r`, `\t`, or `\xHH`, so a crafted filename cannot forge a history record or send terminal control sequences; `bm history` escapes rows written by older versions the same way, and backslashes stay literal.
 
 ## Config
 

@@ -16,6 +16,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Match `bm uninstall` name-based leftovers literally: the bundle name and its no-space, underscore, and hyphen spellings count only in Application Support, Caches, Logs, and Saved Application State, so another product whose name extends the app's (for example `Telegram Desktop` for `Telegram`) or whose bundle ID shares the app's vendor component is no longer removed.
 - Unload and remove only the LaunchAgents an uninstalled app owns: an agent must be named `<bundleID>.plist` or start an executable inside the selected bundle. Another product's agent that only watches or mentions the app, such as Riot Client's install checker for League of Legends, and a sibling channel's agent stay loaded, and a plist replaced or rewritten after planning is kept.
 - Stop with a config error instead of loading defaults when the config path is a broken symlink or runs through a broken directory link, so `bm clean` never runs without the user's whitelist when a dotfiles link or its volume is unavailable.
+- Escape control characters in clean and uninstall logs and in `bm history` output, so a crafted filename can no longer forge a successful cleanup record or send terminal control sequences. Rows written by older versions are escaped when displayed, and backslashes stay literal.
 
 ## v0.6.26 - 2026-09-07
 
