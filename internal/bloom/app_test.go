@@ -335,16 +335,6 @@ func TestOfficialUninstallerVendorDoesNotBlockGenericFalconNames(t *testing.T) {
 	}
 }
 
-func TestReferenceTokenMatchingAvoidsSubstringFalsePositives(t *testing.T) {
-	appPath := "/Applications/Foo.app"
-	if !containsAppPathReference(`<string>/Applications/Foo.app/Contents/MacOS/foo</string>`, appPath) {
-		t.Fatal("app path reference with child path was not matched")
-	}
-	if containsAppPathReference(`<string>/Applications/Foo.app.backup</string>`, appPath) {
-		t.Fatal("app path substring was treated as a reference")
-	}
-}
-
 func TestRunUpdatePackageFilterRunsSelectedTaskPackage(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TaskOrder = []string{"brew", "npm"}
@@ -711,7 +701,6 @@ func TestFindRelatedPathsKeepsTokenMatchesOnBoundaries(t *testing.T) {
 		filepath.Join(home, "Library", "Containers", "com.example.TestApp.helper"),
 		filepath.Join(home, "Library", "Application Scripts", "TEAM.com.example.TestApp.Extension"),
 		filepath.Join(home, "Library", "Preferences", "ByHost", "com.example.TestApp.ABC123.plist"),
-		filepath.Join(home, "Library", "LaunchAgents", "com.example.TestApp.helper.plist"),
 	}
 	for _, path := range wantPaths {
 		if strings.HasSuffix(path, ".plist") {
@@ -732,7 +721,6 @@ func TestFindRelatedPathsKeepsTokenMatchesOnBoundaries(t *testing.T) {
 		filepath.Join(home, "Library", "Containers", "com.example.TestApplication"),
 		filepath.Join(home, "Library", "Application Scripts", "TEAM.com.example.TestApplication.Extension"),
 		filepath.Join(home, "Library", "Preferences", "ByHost", "com.example.TestApplication.ABC123.plist"),
-		filepath.Join(home, "Library", "LaunchAgents", "com.example.TestApplication.plist"),
 	} {
 		if strings.HasSuffix(path, ".plist") {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1039,16 +1027,13 @@ func TestStopAppSendsQuitThenTerminatesVerifiedBundleProcess(t *testing.T) {
 
 	appPath := filepath.Join(home, "Applications", "Visual Studio Code.app")
 	writeTestInfoPlist(t, appPath, "com.microsoft.VSCode", "Code")
+	helper := filepath.Join(appPath, "Contents", "Library", "LoginItems", "Code Helper.app", "Contents", "MacOS", "Code Helper")
+	writeTestExecutable(t, helper)
 	launchDir := filepath.Join(home, "Library", "LaunchAgents")
-	for _, name := range []string{"com.microsoft.VSCode.plist", "com.microsoft.VSCode.helper.plist", "com.microsoft.VSCodeInsiders.plist"} {
-		path := filepath.Join(launchDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("plist"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeTestLaunchAgent(t, filepath.Join(launchDir, "com.microsoft.VSCode.plist"), "/usr/local/bin/code-updater", true, "")
+	writeTestLaunchAgent(t, filepath.Join(launchDir, "com.microsoft.VSCode.helper.plist"), helper, false, "")
+	writeTestLaunchAgent(t, filepath.Join(launchDir, "com.microsoft.VSCode.nightly.plist"), "/Applications/Code Nightly.app/Contents/MacOS/Code", false, "")
+	writeTestLaunchAgent(t, filepath.Join(launchDir, "com.microsoft.VSCodeInsiders.plist"), "", false, "")
 	r := &processRunner{
 		pids: map[string][]string{"Code": []string{"123"}},
 		processPaths: map[string]string{
@@ -1078,6 +1063,9 @@ func TestStopAppSendsQuitThenTerminatesVerifiedBundleProcess(t *testing.T) {
 	}
 	if runnerCallContains(r.calls, "com.microsoft.VSCodeInsiders.plist") {
 		t.Fatalf("sibling bundle LaunchAgent was unloaded: %#v", r.calls)
+	}
+	if runnerCallContains(r.calls, "com.microsoft.VSCode.nightly.plist") {
+		t.Fatalf("a label extending the bundle ID proved ownership: %#v", r.calls)
 	}
 }
 
@@ -1322,6 +1310,48 @@ func (r *processRunner) Run(_ context.Context, name string, args ...string) Comm
 	return CommandOutput{}
 }
 
+// writeTestLaunchAgent writes an XML LaunchAgent plist. A non-empty program
+// becomes the Program key when useProgramKey is set, else ProgramArguments[0];
+// watchPath, when set, is listed in WatchPaths only.
+func writeTestLaunchAgent(t *testing.T, path, program string, useProgramKey bool, watchPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var body strings.Builder
+	body.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>` + strings.TrimSuffix(filepath.Base(path), ".plist") + `</string>
+`)
+	if program != "" {
+		if useProgramKey {
+			body.WriteString("  <key>Program</key>\n  <string>" + program + "</string>\n")
+		} else {
+			body.WriteString("  <key>ProgramArguments</key>\n  <array>\n    <string>" + program + "</string>\n    <string>--agent</string>\n  </array>\n")
+		}
+	}
+	if watchPath != "" {
+		body.WriteString("  <key>WatchPaths</key>\n  <array>\n    <string>" + watchPath + "</string>\n  </array>\n")
+	}
+	body.WriteString("</dict>\n</plist>\n")
+	if err := os.WriteFile(path, []byte(body.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeTestInfoPlist(t *testing.T, appPath, bundleID, executable string) {
 	t.Helper()
 	contents := filepath.Join(appPath, "Contents")
@@ -1364,18 +1394,16 @@ func TestBatchUninstallMovesAppAndRelatedFilesToTrash(t *testing.T) {
 	cachePath := filepath.Join(home, "Library", "Caches", "com.example.foo")
 	cacheFile := filepath.Join(cachePath, "cache.db")
 	launchAgentPath := filepath.Join(home, "Library", "LaunchAgents", "com.other.foo-helper.plist")
-	for _, path := range []string{appFile, cacheFile, launchAgentPath} {
+	for _, path := range []string{appFile, cacheFile} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		contents := []byte("data")
-		if path == launchAgentPath {
-			contents = []byte(appPath)
-		}
-		if err := os.WriteFile(path, contents, 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// An unrelated label is owned because launchd starts the bundle's binary.
+	writeTestLaunchAgent(t, launchAgentPath, appFile, false, "")
 
 	summary := BatchUninstall(context.Background(), pathRunner{}, []AppEntry{{
 		Path:     appPath,

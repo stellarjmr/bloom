@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -551,12 +550,9 @@ func FindRelatedPaths(app AppEntry) []string {
 		matchBundleIDInDir(filepath.Join(prefDir, "ByHost"), app.BundleID, &paths)
 	}
 
-	// LaunchAgents: <bundleID>*.plist
-	launchUser := filepath.Join(home, "Library", "LaunchAgents")
-	if app.BundleID != "" {
-		matchBundleIDInDir(launchUser, app.BundleID, &paths)
-	}
-	matchLaunchAgentsReferencingApp(app, &paths)
+	// LaunchAgents: <bundleID>.plist or an agent whose program lives in the
+	// bundle. Labels and text mentions alone do not prove ownership.
+	matchOwnedLaunchAgents(context.Background(), home, newLaunchAgentOwner(app), &paths)
 
 	// Cookies + HTTPStorages binarycookies
 	cookies := filepath.Join(home, "Library", "Cookies")
@@ -579,73 +575,6 @@ func FindRelatedPaths(app AppEntry) []string {
 	}
 
 	return out
-}
-
-func matchLaunchAgentsReferencingApp(app AppEntry, out *[]string) {
-	if app.Path == "" {
-		return
-	}
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		return
-	}
-	dir := filepath.Join(home, "Library", "LaunchAgents")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".plist") {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		if containsAppPathReference(string(data), app.Path) {
-			*out = append(*out, path)
-		}
-	}
-}
-
-func containsAppPathReference(text, appPath string) bool {
-	if appPath == "" {
-		return false
-	}
-	for start := 0; start < len(text); {
-		idx := strings.Index(text[start:], appPath)
-		if idx < 0 {
-			return false
-		}
-		idx += start
-		end := idx + len(appPath)
-		if pathReferenceBoundaryBefore(text, idx) && pathReferenceBoundaryAfter(text, end) {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(text[idx:])
-		if size <= 0 {
-			return false
-		}
-		start = idx + size
-	}
-	return false
-}
-
-func pathReferenceBoundaryBefore(s string, idx int) bool {
-	if idx <= 0 {
-		return true
-	}
-	r, _ := utf8.DecodeLastRuneInString(s[:idx])
-	return unicode.IsSpace(r) || strings.ContainsRune("\"'>=(:", r)
-}
-
-func pathReferenceBoundaryAfter(s string, idx int) bool {
-	if idx >= len(s) {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(s[idx:])
-	return r == '/' || unicode.IsSpace(r) || strings.ContainsRune("\"'<):;", r)
 }
 
 // leftoverNameToken returns the app bundle name used for literal leftover
@@ -1104,10 +1033,28 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	}
 	pathSizes := make(map[string]int64, len(paths))
 	appBundlePlanned := false
+	// Planned LaunchAgent plists are bound to the identity, and the launchd
+	// program, that proved ownership while the bundle still exists; one
+	// replaced or rewritten before its final move stays in place.
+	type plannedLaunchAgent struct {
+		identity string
+		program  string
+	}
+	launchAgentOwner := newLaunchAgentOwner(app)
+	launchAgents := map[string]plannedLaunchAgent{}
+	home, _ := os.UserHomeDir()
 	for _, p := range paths {
 		pathSizes[p], _ = pathSizeKB(ctx, OSRunner{}, p)
 		if p == app.Path {
 			appBundlePlanned = true
+		}
+		if home != "" && filepath.Dir(p) == userLaunchAgentsDir(home) {
+			identity := cleanPathIdentity(p)
+			owned, program := launchAgentOwner.ownership(ctx, p)
+			if !owned || identity == "" || cleanPathIdentity(p) != identity {
+				identity = ""
+			}
+			launchAgents[p] = plannedLaunchAgent{identity: identity, program: program}
 		}
 	}
 
@@ -1188,7 +1135,16 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			}
 			return
 		}
-		if err := movePathToTrashStubborn(ctx, runner, p); err != nil {
+		expectedIdentity := ""
+		if planned, ok := launchAgents[p]; ok {
+			if planned.identity == "" || cleanPathIdentity(p) != planned.identity ||
+				!launchAgentOwner.stillOwns(ctx, p, planned.program) {
+				res.Failed = append(res.Failed, p)
+				return
+			}
+			expectedIdentity = planned.identity
+		}
+		if err := movePathToTrashStubbornWithIdentity(ctx, runner, p, expectedIdentity); err != nil {
 			res.Failed = append(res.Failed, p)
 			return
 		}
@@ -1320,11 +1276,12 @@ func userLibraryLeftoverRoots(home string) []string {
 }
 
 // matchBundleIDLeftovers appends leftover paths that match a single bundle id
-// across the standard user Library roots, preferences, ByHost, LaunchAgents,
-// and cookies. Matching requires the complete bundle id on dot boundaries
-// (never a fuzzy app name), so it is safe to run for embedded
-// helper/XPC/extension bundle ids discovered inside an app. Non-existent
-// candidates are dropped later by FindRelatedPaths.
+// across the standard user Library roots, preferences, ByHost, and cookies.
+// Matching requires the complete bundle id on dot boundaries (never a fuzzy
+// app name), so it is safe to run for embedded helper/XPC/extension bundle ids
+// discovered inside an app. Helper LaunchAgents are found by the ownership
+// scan in FindRelatedPaths instead. Non-existent candidates are dropped later
+// by FindRelatedPaths.
 func matchBundleIDLeftovers(home, bundleID string, out *[]string) {
 	if bundleID == "" {
 		return
@@ -1335,7 +1292,6 @@ func matchBundleIDLeftovers(home, bundleID string, out *[]string) {
 	prefDir := filepath.Join(home, "Library", "Preferences")
 	*out = append(*out, filepath.Join(prefDir, bundleID+".plist"))
 	matchBundleIDInDir(filepath.Join(prefDir, "ByHost"), bundleID, out)
-	matchBundleIDInDir(filepath.Join(home, "Library", "LaunchAgents"), bundleID, out)
 	*out = append(*out, filepath.Join(home, "Library", "Cookies", bundleID+".binarycookies"))
 }
 
@@ -1572,25 +1528,32 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 	return running
 }
 
+// unloadMatchingLaunchAgents unloads only agents the app owns, so a sibling
+// channel's agent or an unrelated agent that merely watches the app path
+// keeps running. Each agent is judged immediately before its own unload,
+// with its identity bracketing the check, so time spent on earlier agents
+// cannot leave a stale verdict for a plist an updater rewrites meanwhile.
 func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry) {
-	if app.BundleID == "" {
-		return
-	}
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		return
 	}
-	dir := filepath.Join(home, "Library", "LaunchAgents")
+	dir := userLaunchAgentsDir(home)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
+	owner := newLaunchAgentOwner(app)
 	for _, entry := range entries {
-		name := entry.Name()
-		if !launchAgentNameMatchesBundleID(name, app.BundleID) {
+		if ctx.Err() != nil {
+			return
+		}
+		plist := filepath.Join(dir, entry.Name())
+		identity := cleanPathIdentity(plist)
+		if identity == "" || !owner.owns(ctx, plist) || cleanPathIdentity(plist) != identity {
 			continue
 		}
-		_ = runner.Run(ctx, "/bin/launchctl", "unload", filepath.Join(dir, name))
+		_ = runner.Run(ctx, "/bin/launchctl", "unload", plist)
 	}
 }
 
@@ -1773,14 +1736,6 @@ func quitAppScript(app AppEntry) string {
 		return fmt.Sprintf("tell application %q to quit", app.Name)
 	}
 	return ""
-}
-
-func launchAgentNameMatchesBundleID(name, bundleID string) bool {
-	if !looksLikeBundleID(bundleID) || !strings.HasSuffix(name, ".plist") {
-		return false
-	}
-	stem := strings.TrimSuffix(name, ".plist")
-	return stem == bundleID || strings.HasPrefix(stem, bundleID+".")
 }
 
 func processRunning(ctx context.Context, runner Runner, name string) bool {

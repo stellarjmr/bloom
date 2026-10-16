@@ -14,6 +14,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - Stop `bm uninstall` from claiming other apps' Group Containers and bundle-ID data: a leftover must carry the app's complete bundle ID on dot boundaries, so vendor-shared containers such as Microsoft's OneAuth, Entra, Defender, and Office shared containers, or Podcasts' container for TestFlight, are no longer removed together with one product.
 - Match `bm uninstall` name-based leftovers literally: the bundle name and its no-space, underscore, and hyphen spellings count only in Application Support, Caches, Logs, and Saved Application State, so another product whose name extends the app's (for example `Telegram Desktop` for `Telegram`) or whose bundle ID shares the app's vendor component is no longer removed.
+- Unload and remove only the LaunchAgents an uninstalled app owns: an agent must be named `<bundleID>.plist` or start an executable inside the selected bundle. Another product's agent that only watches or mentions the app, such as Riot Client's install checker for League of Legends, and a sibling channel's agent stay loaded, and a plist replaced or rewritten after planning is kept.
 
 ## v0.6.26 - 2026-09-07
 
