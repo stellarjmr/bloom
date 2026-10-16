@@ -142,6 +142,26 @@ func TestPrintCleanResultGroupsTargetsByLabel(t *testing.T) {
 	}
 }
 
+func TestRunCleanStopsWhenConfigLinkIsBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, "config.toml")
+	if err := os.Symlink(filepath.Join(home, "Volumes", "dotfiles", "config.toml"), configPath); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := &App{Out: &out, Err: &errOut, Runner: pathRunner{}}
+	if code := app.Run([]string{"clean", "--dry-run", "--config", configPath}); code != 1 {
+		t.Fatalf("clean exit = %d, want 1; stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "broken symlink") {
+		t.Fatalf("stderr = %q, want broken symlink explanation", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("clean produced a plan from defaults: %q", out.String())
+	}
+}
+
 func TestRunCheckOutputsTSV(t *testing.T) {
 	r := &recordingRunner{
 		paths: map[string]bool{"brew": true, "npm": true},

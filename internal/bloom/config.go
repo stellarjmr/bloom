@@ -63,6 +63,9 @@ func LoadConfig(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if missingErr := confirmConfigMissing(path); missingErr != nil {
+				return cfg, fmt.Errorf("config %s is unavailable: %w", path, missingErr)
+			}
 			return cfg, nil
 		}
 		return cfg, err
@@ -125,6 +128,65 @@ func LoadConfig(path string) (Config, error) {
 	}
 	cfg.Clean.Whitelist = effectiveCleanWhitelist(cfg.Clean.Whitelist)
 	return cfg, nil
+}
+
+// confirmConfigMissing separates a config that does not exist from one that
+// cannot be reached. Defaults are safe only for the first: a dangling symlink
+// (a dotfiles link whose target moved, or whose volume is not mounted) or an
+// ancestor that is not a directory would otherwise drop the user's settings,
+// including clean whitelist entries that protect their data.
+//
+// The walk follows the kernel's lookup instead of a lexical clean: each
+// symlink is resolved before the next component, so ".." after a link climbs
+// from the link's target, exactly as open(2) does for the same path.
+func confirmConfigMissing(path string) error {
+	current := string(os.PathSeparator)
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if current, err = filepath.EvalSymlinks(wd); err != nil {
+			return err
+		}
+	}
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == os.PathSeparator })
+	for i, part := range parts {
+		switch part {
+		case ".":
+			continue
+		case "..":
+			// current is fully resolved, so its lexical parent is the physical one.
+			current = filepath.Dir(current)
+			continue
+		}
+		next := filepath.Join(current, part)
+		info, err := os.Lstat(next)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(next)
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("%s is a broken symlink", next)
+			}
+			if err != nil {
+				return err
+			}
+			if info, err = os.Stat(resolved); err != nil {
+				return err
+			}
+			next = resolved
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", next)
+		}
+		current = next
+	}
+	return fmt.Errorf("%s exists but could not be opened", path)
 }
 
 // applyEnvironmentConfig applies environment overrides such as NO_COLOR.

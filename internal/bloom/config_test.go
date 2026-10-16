@@ -52,6 +52,100 @@ exclude = ["legacy"]
 	}
 }
 
+func TestLoadConfigFailsClosedWhenConfigLinkIsBroken(t *testing.T) {
+	dir := t.TempDir()
+	linked := filepath.Join(dir, "config.toml")
+	if err := os.Symlink(filepath.Join(dir, "unmounted", "config.toml"), linked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(linked); err == nil || !strings.Contains(err.Error(), "broken symlink") {
+		t.Fatalf("LoadConfig(broken file link) error = %v, want broken symlink", err)
+	}
+
+	linkedDir := filepath.Join(dir, "dotfiles")
+	if err := os.Symlink(filepath.Join(dir, "gone"), linkedDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(filepath.Join(linkedDir, "bloom", "config.toml")); err == nil || !strings.Contains(err.Error(), "broken symlink") {
+		t.Fatalf("LoadConfig(broken directory link) error = %v, want broken symlink", err)
+	}
+
+	notDir := filepath.Join(dir, "plain-file")
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(filepath.Join(notDir, "config.toml")); err == nil {
+		t.Fatal("LoadConfig below a regular file used defaults")
+	}
+}
+
+func TestLoadConfigFollowsSymlinksBeforeParentComponents(t *testing.T) {
+	dir := t.TempDir()
+	lexical := filepath.Join(dir, "a")
+	physical := filepath.Join(dir, "b", "subdir")
+	for _, path := range []string{lexical, physical} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(physical, filepath.Join(lexical, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(lexical, "broken")); err != nil {
+		t.Fatal(err)
+	}
+	// Built by concatenation: filepath.Join would clean away the "..".
+	viaLink := filepath.Join(lexical, "link") + "/../config.toml"
+	viaBrokenLink := filepath.Join(lexical, "broken") + "/../config.toml"
+
+	// a/link/.. is b, whose config.toml is missing: defaults apply.
+	if _, err := LoadConfig(viaLink); err != nil {
+		t.Fatalf("LoadConfig(%q) error = %v, want defaults for the physically missing file", viaLink, err)
+	}
+	// The kernel cannot resolve a broken link, so no lexical shortcut may skip it.
+	if _, err := LoadConfig(viaBrokenLink); err == nil || !strings.Contains(err.Error(), "broken symlink") {
+		t.Fatalf("LoadConfig(%q) error = %v, want broken symlink", viaBrokenLink, err)
+	}
+
+	// A decoy at the lexically cleaned path must not change either verdict.
+	if err := os.WriteFile(filepath.Join(lexical, "config.toml"), []byte("[settings]\ncolor = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(viaLink)
+	if err != nil || !cfg.Color {
+		t.Fatalf("LoadConfig(%q) = color %v, err %v; want defaults, not the lexical decoy", viaLink, cfg.Color, err)
+	}
+	if _, err := LoadConfig(viaBrokenLink); err == nil || !strings.Contains(err.Error(), "broken symlink") {
+		t.Fatalf("LoadConfig(%q) with decoy error = %v, want broken symlink", viaBrokenLink, err)
+	}
+}
+
+func TestLoadConfigUsesDefaultsOnlyWhenConfigIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	liveTarget := filepath.Join(dir, "dotfiles")
+	if err := os.MkdirAll(liveTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	liveLink := filepath.Join(dir, "config-link")
+	if err := os.Symlink(liveTarget, liveLink); err != nil {
+		t.Fatal(err)
+	}
+	want := effectiveCleanWhitelist(DefaultCleanWhitelist())
+	for _, path := range []string{
+		filepath.Join(dir, "config.toml"),
+		filepath.Join(dir, "absent", "bloom", "config.toml"),
+		filepath.Join(liveLink, "bloom", "config.toml"),
+	} {
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig(%q) error = %v, want defaults", path, err)
+		}
+		if !reflect.DeepEqual(cfg.Clean.Whitelist, want) {
+			t.Fatalf("LoadConfig(%q) whitelist = %#v, want defaults", path, cfg.Clean.Whitelist)
+		}
+	}
+}
+
 func TestLoadConfigMergesHardCleanSafetyWhitelist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
