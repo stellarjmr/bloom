@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type pathRunner map[string]bool
@@ -1806,6 +1808,84 @@ func TestBatchUninstallKeepsDataWhenAppReappearsAfterBundleMove(t *testing.T) {
 	(&App{Out: &out, Err: &errOut}).printUninstallSummary(summary, false, true)
 	if !strings.Contains(out.String(), "kept everything not yet removed because "+appPath+" reappeared") {
 		t.Fatalf("summary did not explain the kept data: %q", out.String())
+	}
+}
+
+// hangingTeardownRunner stands in for teardown commands that never answer,
+// such as osascript waiting on an Automation prompt: each blocks until its
+// context ends. The app reports running, so the quit path runs as well.
+type hangingTeardownRunner struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *hangingTeardownRunner) LookPath(string) (string, error) {
+	return "", errors.New("not found")
+}
+
+func (r *hangingTeardownRunner) Run(ctx context.Context, name string, args ...string) CommandOutput {
+	r.mu.Lock()
+	r.calls = append(r.calls, strings.Join(append([]string{name}, args...), " "))
+	r.mu.Unlock()
+	switch name {
+	case "/usr/bin/osascript", "/bin/launchctl", "/usr/libexec/PlistBuddy", "/usr/bin/killall":
+		<-ctx.Done()
+		return CommandOutput{Err: ctx.Err()}
+	case "/usr/bin/pgrep":
+		return CommandOutput{Stdout: "123\n"}
+	}
+	return CommandOutput{Err: errors.New("unavailable")}
+}
+
+func TestBatchUninstallSkipsTeardownStepsThatTimeOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BLOOM_TEST_TRASH_DIR", filepath.Join(home, "trash-stub"))
+	oldStep, oldQuit, oldPoll := uninstallTeardownStepTimeout, stopAppQuitTimeout, stopAppPollInterval
+	uninstallTeardownStepTimeout, stopAppQuitTimeout, stopAppPollInterval = 20*time.Millisecond, 20*time.Millisecond, 0
+	t.Cleanup(func() {
+		uninstallTeardownStepTimeout, stopAppQuitTimeout, stopAppPollInterval = oldStep, oldQuit, oldPoll
+	})
+
+	var apps []AppEntry
+	for _, name := range []string{"Foo", "Bar"} {
+		id := "com.example." + strings.ToLower(name)
+		appPath := filepath.Join(home, "Applications", name+".app")
+		writeTestInfoPlist(t, appPath, id, name)
+		writeTestInfoPlist(t, filepath.Join(appPath, "Contents", "Library", "LoginItems", name+" Helper.app"), id+".helper", name+" Helper")
+		writeTestLaunchAgent(t, filepath.Join(home, "Library", "LaunchAgents", id+".plist"), "/usr/local/bin/"+strings.ToLower(name), true, "")
+		apps = append(apps, AppEntry{Path: appPath, Name: name, BundleID: id})
+	}
+
+	r := &hangingTeardownRunner{}
+	done := make(chan BatchSummary, 1)
+	go func() { done <- BatchUninstall(context.Background(), r, apps, false) }()
+	var summary BatchSummary
+	select {
+	case summary = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("uninstall stalled on teardown commands that never answer")
+	}
+
+	r.mu.Lock()
+	calls := append([]string(nil), r.calls...)
+	r.mu.Unlock()
+	for i, res := range summary.Results {
+		if res.Err != nil || !res.AppRemoved {
+			t.Fatalf("result %d = %+v, want the bundle removed despite timed-out teardown", i, res)
+		}
+		app := apps[i]
+		for _, want := range []string{
+			`tell application id "` + app.BundleID + `" to quit`,
+			"/bin/launchctl unload " + filepath.Join(home, "Library", "LaunchAgents", app.BundleID+".plist"),
+			`"System Events"`,
+			"/bin/launchctl bootout gui/",
+			lsregisterPath + " -u " + app.Path,
+		} {
+			if !runnerCallContains(calls, want) {
+				t.Fatalf("teardown for %s skipped %q after an earlier step timed out: %#v", app.Name, want, calls)
+			}
+		}
 	}
 }
 

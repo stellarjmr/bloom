@@ -112,6 +112,8 @@ Per-app cleanup runs in this order so brew can detect and clean its own metadata
 4. Move the app bundle to the current user's Trash. Root-owned bundles, including many Mac App Store apps, may request terminal administrator authentication; Bloom still moves the bundle to Trash rather than permanently deleting it.
 5. Remove the matching `~/Library` entries only after the app bundle is gone, then remove its Login Item and unregister the selected LaunchServices path. Bloom checks the app path again before each of these steps, before every Trash retry, and before the Dock cleanup at the end of a batch. If anything reappears there once the bundle has moved, for example from an updater or a quick reinstall, or if the path cannot be checked, Bloom stops and leaves the remaining data, Login Item, LaunchServices record, and Dock tile in place.
 
+Each best-effort teardown step runs under its own time limit: 30 seconds for the graceful quit, so the app's own save prompt can still be answered, and 5 seconds for unloading LaunchAgents, removing the Login Item, booting out helpers, and editing the Dock. A step that times out, for example while an Automation permission prompt is waiting, is skipped for that app and the uninstall continues.
+
 Dry runs and uninstall summaries print the exact Homebrew zap command when a cask is detected.
 
 After the batch completes Bloom rewrites the Dock plist, restarts Dock when needed, garbage-collects stale LaunchServices records, and runs `brew autoremove` if any cask was removed. It unregisters each removed bundle directly and does not force a domain-wide LaunchServices rebuild, which could terminate unrelated active app extensions or network tunnels.

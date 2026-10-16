@@ -1350,7 +1350,7 @@ func removeLoginItem(ctx context.Context, runner Runner, app AppEntry) {
 			end repeat
 		end try
 	end tell`, name)
-	_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
+	_ = runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/bin/osascript", "-e", script)
 }
 
 // userLibraryLeftoverRoots lists the standard per-user ~/Library directories
@@ -1492,7 +1492,7 @@ func bootoutLoginItemHelpers(ctx context.Context, runner Runner, helperIDs []str
 		if !looksLikeBundleID(id) {
 			continue
 		}
-		_ = runner.Run(ctx, "/bin/launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, id))
+		_ = runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/bin/launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, id))
 	}
 }
 
@@ -1551,7 +1551,7 @@ nextApp:
 				if kept[n] = appPathStillEmpty(app.Path); kept[n] != nil {
 					continue nextApp
 				}
-				out := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+				out := runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/libexec/PlistBuddy", "-c",
 					fmt.Sprintf("Delete :%s:%d", array, i),
 					dockPlistPath())
 				if out.Err == nil {
@@ -1561,7 +1561,7 @@ nextApp:
 		}
 	}
 	if changed {
-		_ = runner.Run(ctx, "/usr/bin/killall", "Dock")
+		_ = runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/bin/killall", "Dock")
 	}
 	return kept
 }
@@ -1572,7 +1572,7 @@ func dockPlistPath() string {
 }
 
 func dockTileCount(ctx context.Context, runner Runner, array string) int {
-	out := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+	out := runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/libexec/PlistBuddy", "-c",
 		fmt.Sprintf("Print :%s", array), dockPlistPath())
 	if out.Err != nil {
 		return 0
@@ -1587,10 +1587,10 @@ func dockTileCount(ctx context.Context, runner Runner, array string) int {
 }
 
 func dockTileMatchesApp(ctx context.Context, runner Runner, array string, index int, app AppEntry) bool {
-	url := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+	url := runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/libexec/PlistBuddy", "-c",
 		fmt.Sprintf("Print :%s:%d:tile-data:file-data:_CFURLString", array, index),
 		dockPlistPath())
-	bundleID := runner.Run(ctx, "/usr/libexec/PlistBuddy", "-c",
+	bundleID := runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/usr/libexec/PlistBuddy", "-c",
 		fmt.Sprintf("Print :%s:%d:tile-data:bundle-identifier", array, index),
 		dockPlistPath())
 	if app.BundleID != "" && bundleID.Err == nil && strings.TrimSpace(bundleID.Stdout) == app.BundleID {
@@ -1612,6 +1612,23 @@ func urlPathEscape(p string) string {
 	return r.Replace(p)
 }
 
+// Best-effort teardown steps run under their own time limits; a step that
+// times out is skipped for that app and the rest of the uninstall continues.
+// Without a limit, osascript can wait out the two-minute Apple Event timeout
+// on an Automation prompt for every app in a batch. The quit window stays
+// longer so the app's own save-changes sheet can still be answered before
+// Bloom escalates to signals.
+var (
+	uninstallTeardownStepTimeout = 5 * time.Second
+	stopAppQuitTimeout           = 30 * time.Second
+)
+
+func runTeardownStep(ctx context.Context, runner Runner, timeout time.Duration, name string, args ...string) CommandOutput {
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return runner.Run(stepCtx, name, args...)
+}
+
 const stopAppQuitPolls = 10
 const stopAppForcePolls = 5
 const stopAppProcessProbeTimeout = 2 * time.Second
@@ -1627,7 +1644,7 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 	running := appProcessRunning(ctx, runner, app, matchName)
 	if running {
 		if script := quitAppScript(app); script != "" {
-			_ = runner.Run(ctx, "/usr/bin/osascript", "-e", script)
+			_ = runTeardownStep(ctx, runner, stopAppQuitTimeout, "/usr/bin/osascript", "-e", script)
 		}
 		running = !waitForAppProcessExit(ctx, runner, app, matchName, stopAppQuitPolls)
 	}
@@ -1684,7 +1701,7 @@ func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry
 		if identity == "" || !owner.owns(ctx, plist) || cleanPathIdentity(plist) != identity {
 			continue
 		}
-		_ = runner.Run(ctx, "/bin/launchctl", "unload", plist)
+		_ = runTeardownStep(ctx, runner, uninstallTeardownStepTimeout, "/bin/launchctl", "unload", plist)
 	}
 }
 
