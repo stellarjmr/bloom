@@ -88,7 +88,7 @@ func DefaultCleanWhitelist() []string {
 		"~/.cache/torch*",
 		"~/.cache/tensorflow*",
 		"~/.cache/wandb*",
-		"~/.gradle/caches/*",
+		"~/.gradle/caches/build-cache-*/*",
 		"~/.gradle/daemon/*",
 		"~/Library/Caches/com.nssurge.surge-mac/*",
 		"~/Library/Application Support/com.nssurge.surge-mac/*",
@@ -244,6 +244,15 @@ func SetCleanWhitelist(cfg *Config, selected []string) error {
 	return nil
 }
 
+// legacyCleanWhitelistRows maps whitelist defaults that older Bloom versions
+// wrote to the menu row that now stands for the same protection. The menu
+// checks a row only on an exact pattern, so without the mapping the row
+// showed unchecked and saving the menu silently dropped the protection.
+// ~/.gradle/caches/* covered nothing but the build-cache rule beneath it.
+var legacyCleanWhitelistRows = map[string]string{
+	"~/.gradle/caches/*": "~/.gradle/caches/build-cache-*/*",
+}
+
 func normalizeCleanWhitelist(patterns []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(patterns))
@@ -253,6 +262,9 @@ func normalizeCleanWhitelist(patterns []string) []string {
 			continue
 		}
 		portable := portableCleanPattern(pattern)
+		if row, ok := legacyCleanWhitelistRows[portable]; ok {
+			portable = row
+		}
 		key := expandedCleanPattern(portable)
 		if seen[key] {
 			continue

@@ -1424,6 +1424,75 @@ func TestCleanWhitelistRowsProtectMacOSPipAndYarnCaches(t *testing.T) {
 	}
 }
 
+// menuSaveCleanWhitelist mirrors bm's Config -> Clean menu: a row starts
+// checked only when its exact pattern is in the whitelist, and saving
+// unchanged rows writes them back through set-clean-whitelist.
+func menuSaveCleanWhitelist(t *testing.T, cfg *Config) {
+	t.Helper()
+	active := map[string]bool{}
+	for _, pattern := range cfg.Clean.Whitelist {
+		active[pattern] = true
+	}
+	var selected []string
+	for _, item := range CleanWhitelistItems() {
+		if active[item.Pattern] {
+			selected = append(selected, item.Pattern)
+		}
+	}
+	if err := SetCleanWhitelist(cfg, selected); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanWhitelistMenuKeepsDefaultGradleProtection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	entry := filepath.Join(home, ".gradle", "caches", "build-cache-1", "0123abcd")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, "config.toml")
+
+	for name, whitelist := range map[string][]string{
+		"current default": DefaultCleanWhitelist(),
+		"legacy default":  {"~/.gradle/caches/*", "~/.gradle/daemon/*"},
+	} {
+		cfg := DefaultConfig()
+		cfg.Clean.Whitelist = whitelist
+		if err := SaveConfig(configPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		menuSaveCleanWhitelist(t, &loaded)
+		idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+		res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: loaded, Runner: idle})
+		if cleanResultCovers(res, entry) {
+			t.Fatalf("%s: saving the whitelist menu unchanged dropped Gradle protection: %#v", name, loaded.Clean.Whitelist)
+		}
+
+		// Unticking the row must actually take the protection away.
+		var kept []string
+		for _, pattern := range loaded.Clean.Whitelist {
+			if !strings.Contains(pattern, ".gradle/caches") {
+				kept = append(kept, pattern)
+			}
+		}
+		if err := SetCleanWhitelist(&loaded, kept); err != nil {
+			t.Fatal(err)
+		}
+		res = RunClean(context.Background(), CleanOptions{DryRun: true, Config: loaded, Runner: idle})
+		if !cleanResultCovers(res, entry) {
+			t.Fatalf("%s: unticking the Gradle build cache row left it protected: %#v", name, loaded.Clean.Whitelist)
+		}
+	}
+}
+
 func TestRunCleanKeepsDiagnosticReportsDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
