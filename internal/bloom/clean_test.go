@@ -1348,6 +1348,33 @@ func TestRunCleanKeepsGoogleIdentityAndClearcutState(t *testing.T) {
 	}
 }
 
+func TestRunCleanLeavesGitConfigLockAndBackups(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	gitState := []string{
+		filepath.Join(home, ".gitconfig.lock"),
+		filepath.Join(home, ".gitconfig.bak"),
+		filepath.Join(home, ".gitconfig.bak.2026-10-01"),
+	}
+	for _, path := range gitState {
+		if err := os.WriteFile(path, []byte("[user]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg})
+	for _, path := range gitState {
+		if cleanResultCovers(res, path) {
+			t.Fatalf("Git config state %q was targeted: %#v", path, res.Targets)
+		}
+		if !shouldProtectCleanPath(path) {
+			t.Fatalf("Git config state %q is not protected", path)
+		}
+	}
+}
+
 func TestRunCleanKeepsDiagnosticReportsDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -19,6 +19,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Escape control characters in clean and uninstall logs and in `bm history` output, so a crafted filename can no longer forge a successful cleanup record or send terminal control sequences. Rows written by older versions are escaped when displayed, and backslashes stay literal.
 - Keep the `~/Library/Logs/DiagnosticReports` directory during `bm clean` and clean only the reports inside it; moving the directory to Trash stopped macOS from saving later crash reports.
 - Never clean Google's `GIPPseudonymousID` identity store or `CCTClearcutLogger` queue under `~/Library/Caches`; removing them while Gemini runs made it rewrite data to disk in an unbounded loop.
+- Stop cleaning `~/.gitconfig.lock`, and protect `~/.gitconfig.bak*`: Git holds the lock while it writes the config and renames it into place, so moving it to Trash mid-write could lose that change, and a backup can be the only copy of earlier settings.
 
 ## v0.6.26 - 2026-09-07
 

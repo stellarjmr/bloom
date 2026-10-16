@@ -962,7 +962,6 @@ func defaultCleanRules() []cleanRule {
 		{Label: "Electron cache", Pattern: "~/.cache/electron/*"},
 		{Label: "ESLint cache", Pattern: "~/.cache/eslint/*"},
 		{Label: "Prettier cache", Pattern: "~/.cache/prettier/*"},
-		{Label: "Git config lock", Pattern: "~/.gitconfig.lock"},
 		{Label: "Oh My Zsh cache", Pattern: "~/.oh-my-zsh/cache/*"},
 	}
 	seen := map[string]bool{}
@@ -1723,6 +1722,10 @@ var protectedCleanPathPatterns = []string{
 	// sandbox, so removing it silently disables crash reporting. Only the
 	// directory itself is protected; the reports inside stay cleanable.
 	"*/Library/Logs/DiagnosticReports",
+	// Git owns its config transaction lock, and a config backup can be the
+	// only remaining copy of user settings; neither is a rebuildable cache.
+	"*/.gitconfig.lock",
+	"*/.gitconfig.bak*",
 	"*/Library/Logs/bloom",
 	"*/Library/Logs/bloom/*",
 	"*/Library/Logs/mole",
