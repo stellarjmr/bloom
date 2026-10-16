@@ -499,13 +499,6 @@ func isBundleIDAlphaNum(r rune) bool {
 		(r >= '0' && r <= '9')
 }
 
-func bundleIDComponents(id string) []string {
-	if !looksLikeBundleID(id) {
-		return nil
-	}
-	return strings.Split(id, ".")
-}
-
 func bundleIDEqual(id, want string) bool {
 	return strings.EqualFold(id, want)
 }
@@ -530,7 +523,7 @@ func FindRelatedPaths(app AppEntry) []string {
 
 	for _, root := range userLibraryLeftoverRoots(home) {
 		if app.BundleID != "" {
-			matchInDir(root, app.BundleID, &paths)
+			matchBundleIDInDir(root, app.BundleID, &paths)
 		}
 		if nameToken == "" || strings.EqualFold(nameToken, app.BundleID) {
 			continue
@@ -544,7 +537,6 @@ func FindRelatedPaths(app AppEntry) []string {
 		}
 	}
 	matchBundleLeafExactPaths(home, app, &paths)
-	matchGroupContainers(app, &paths)
 	matchDiagnosticReports(app, &paths)
 	matchCrashReporterPlists(app, &paths)
 	matchVSCodePaths(app, &paths)
@@ -562,13 +554,13 @@ func FindRelatedPaths(app AppEntry) []string {
 	prefDir := filepath.Join(home, "Library", "Preferences")
 	if app.BundleID != "" {
 		add(filepath.Join(prefDir, app.BundleID+".plist"))
-		matchInDir(filepath.Join(prefDir, "ByHost"), app.BundleID, &paths)
+		matchBundleIDInDir(filepath.Join(prefDir, "ByHost"), app.BundleID, &paths)
 	}
 
 	// LaunchAgents: <bundleID>*.plist
 	launchUser := filepath.Join(home, "Library", "LaunchAgents")
 	if app.BundleID != "" {
-		matchInDir(launchUser, app.BundleID, &paths)
+		matchBundleIDInDir(launchUser, app.BundleID, &paths)
 	}
 	matchLaunchAgentsReferencingApp(app, &paths)
 
@@ -886,95 +878,60 @@ func isTokenBoundary(r rune) bool {
 	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
-func matchGroupContainers(app AppEntry, out *[]string) {
-	if app.BundleID == "" {
+// matchBundleIDInDir appends entries of dir whose names carry bundleID as a
+// complete dot-delimited run. That covers the ID itself, helper data such as
+// <id>.ShipIt or <id>.<UUID>.plist, and qualified names such as
+// TEAMID.<id>.widgets or group.<id>. Vendors reuse one Team ID and domain
+// prefix across products, so a shared prefix, or the ID extended with a
+// hyphen or underscore (another product), never matches.
+func matchBundleIDInDir(dir, bundleID string, out *[]string) {
+	if !looksLikeBundleID(bundleID) {
 		return
 	}
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		return
-	}
-	dir := filepath.Join(home, "Library", "Group Containers")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	domainPrefix := bundleDomainPrefix(app.BundleID)
-	if domainPrefix == "" {
-		return
-	}
-	teamID := readTeamID(app.Path)
-	allowDomainFallback := app.Path == ""
 	for _, entry := range entries {
-		name := entry.Name()
-		if name == "." || name == ".." {
-			continue
-		}
-		if groupContainerMatches(name, teamID, domainPrefix, allowDomainFallback) {
-			*out = append(*out, filepath.Join(dir, name))
+		if nameHasBundleIDBoundary(entry.Name(), bundleID) {
+			*out = append(*out, filepath.Join(dir, entry.Name()))
 		}
 	}
 }
 
-func bundleDomainPrefix(bundleID string) string {
-	parts := bundleIDComponents(bundleID)
-	if len(parts) < 3 {
-		return ""
-	}
-	return strings.Join(parts[:len(parts)-1], ".")
-}
-
-func groupContainerMatches(name, teamID, domainPrefix string, allowDomainFallback bool) bool {
-	if domainPrefix == "" {
+// nameHasBundleIDBoundary reports whether name contains bundleID, compared
+// ASCII case-insensitively, with a dot or the end of the name on both sides.
+func nameHasBundleIDBoundary(name, bundleID string) bool {
+	if !looksLikeBundleID(bundleID) {
 		return false
 	}
-	if teamID != "" {
-		if strings.HasPrefix(name, teamID+"."+domainPrefix) || strings.HasPrefix(name, teamID+".group."+domainPrefix) {
-			return true
-		}
-		if rest := strings.TrimPrefix(name, teamID+"."); rest != name && strings.Contains(rest, "."+domainPrefix) {
-			return true
-		}
-		return false
-	}
-	if !allowDomainFallback {
-		return false
-	}
-	return strings.HasSuffix(name, "."+domainPrefix) || strings.HasSuffix(name, ".group."+domainPrefix)
-}
-
-func readTeamID(appPath string) string {
-	if appPath == "" {
-		return ""
-	}
-	cmd := exec.Command("/usr/bin/codesign", "-dv", appPath)
-	out, err := cmd.CombinedOutput()
-	if err != nil && len(out) == 0 {
-		return ""
-	}
-	for _, field := range strings.Fields(string(out)) {
-		value, ok := strings.CutPrefix(field, "TeamIdentifier=")
-		if !ok || !looksLikeTeamID(value) {
-			continue
-		}
-		return value
-	}
-	return ""
-}
-
-func looksLikeTeamID(value string) bool {
-	if len(value) < 5 {
-		return false
-	}
-	for _, r := range value {
-		switch {
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		default:
+	name = asciiLower(name)
+	id := asciiLower(bundleID)
+	for start := 0; start <= len(name)-len(id); {
+		idx := strings.Index(name[start:], id)
+		if idx < 0 {
 			return false
 		}
+		idx += start
+		end := idx + len(id)
+		if (idx == 0 || name[idx-1] == '.') && (end == len(name) || name[end] == '.') {
+			return true
+		}
+		start = idx + 1
 	}
-	return true
+	return false
+}
+
+// asciiLower lowercases ASCII letters only, so non-ASCII names cannot fold
+// into an ASCII bundle ID.
+func asciiLower(value string) string {
+	out := []byte(value)
+	for i, ch := range out {
+		if ch >= 'A' && ch <= 'Z' {
+			out[i] = ch + ('a' - 'A')
+		}
+	}
+	return string(out)
 }
 
 func matchDiagnosticReports(app AppEntry, out *[]string) {
@@ -1378,20 +1335,21 @@ func userLibraryLeftoverRoots(home string) []string {
 
 // matchBundleIDLeftovers appends leftover paths that match a single bundle id
 // across the standard user Library roots, preferences, ByHost, LaunchAgents,
-// and cookies. Matching is by exact bundle id only (never by fuzzy app name),
-// so it is safe to run for embedded helper/XPC/extension bundle ids discovered
-// inside an app. Non-existent candidates are dropped later by FindRelatedPaths.
+// and cookies. Matching requires the complete bundle id on dot boundaries
+// (never a fuzzy app name), so it is safe to run for embedded
+// helper/XPC/extension bundle ids discovered inside an app. Non-existent
+// candidates are dropped later by FindRelatedPaths.
 func matchBundleIDLeftovers(home, bundleID string, out *[]string) {
 	if bundleID == "" {
 		return
 	}
 	for _, root := range userLibraryLeftoverRoots(home) {
-		matchInDir(root, bundleID, out)
+		matchBundleIDInDir(root, bundleID, out)
 	}
 	prefDir := filepath.Join(home, "Library", "Preferences")
 	*out = append(*out, filepath.Join(prefDir, bundleID+".plist"))
-	matchInDir(filepath.Join(prefDir, "ByHost"), bundleID, out)
-	matchInDir(filepath.Join(home, "Library", "LaunchAgents"), bundleID, out)
+	matchBundleIDInDir(filepath.Join(prefDir, "ByHost"), bundleID, out)
+	matchBundleIDInDir(filepath.Join(home, "Library", "LaunchAgents"), bundleID, out)
 	*out = append(*out, filepath.Join(home, "Library", "Cookies", bundleID+".binarycookies"))
 }
 

@@ -496,21 +496,89 @@ func TestPackageFiltersStillAllowCaskAndNvim(t *testing.T) {
 	}
 }
 
-func TestGroupContainerMatchingUsesTeamAndDomain(t *testing.T) {
-	if !groupContainerMatches("TEAMID.com.example", "TEAMID", "com.example", false) {
-		t.Fatal("expected direct TeamID domain prefix match")
+func TestNameHasBundleIDBoundaryRequiresCompleteDotDelimitedID(t *testing.T) {
+	for _, name := range []string{
+		"com.example.foo",
+		"COM.EXAMPLE.FOO",
+		"com.example.foo.helper",
+		"com.example.foo.ABC-123.plist",
+		"TEAMID.com.example.foo",
+		"TEAMID.com.example.foo.widgets",
+		"group.com.example.foo",
+	} {
+		if !nameHasBundleIDBoundary(name, "com.example.Foo") {
+			t.Fatalf("nameHasBundleIDBoundary(%q) = false, want true", name)
+		}
 	}
-	if !groupContainerMatches("TEAMID.group.com.example", "TEAMID", "com.example", false) {
-		t.Fatal("expected TeamID group domain prefix match")
+	for _, name := range []string{
+		"com.example",
+		"com.example.foobar",
+		"com.example.foo-pro",
+		"com.example.foo_beta",
+		"com.example.fo",
+		"xcom.example.foo",
+		"TEAMID.com.example.bar",
+		"TEAMID.group.com.example.shared",
+		"group.com.example",
+	} {
+		if nameHasBundleIDBoundary(name, "com.example.Foo") {
+			t.Fatalf("nameHasBundleIDBoundary(%q) = true, want false", name)
+		}
 	}
-	if groupContainerMatches("OTHER.com.example", "TEAMID", "com.example", false) {
-		t.Fatal("matched another team's group container")
+	if nameHasBundleIDBoundary("com.example.foo", "com.*.foo") {
+		t.Fatal("matched an invalid bundle ID")
 	}
-	if groupContainerMatches("OTHER.com.example", "", "com.example", false) {
-		t.Fatal("domain fallback should require explicit fallback mode")
+	if nameHasBundleIDBoundary("com.example.Keep", "com.example.keep") {
+		t.Fatal("non-ASCII case folding matched an ASCII bundle ID")
 	}
-	if !groupContainerMatches("OTHER.com.example", "", "com.example", true) {
-		t.Fatal("expected explicit domain fallback match")
+}
+
+func TestFindRelatedPathsKeepsVendorSharedGroupContainers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	groupRoot := filepath.Join(home, "Library", "Group Containers")
+	owned := []string{
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.Word"),
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.Word.widgets"),
+		filepath.Join(groupRoot, "group.com.apple.testflight"),
+	}
+	shared := []string{
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.oneauth"),
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.entrabroker"),
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.teams"),
+		filepath.Join(groupRoot, "UBF8T346G9.com.microsoft.wdav"),
+		filepath.Join(groupRoot, "UBF8T346G9.group.com.microsoft.shared"),
+		filepath.Join(groupRoot, "UBF8T346G9.Office"),
+		filepath.Join(groupRoot, "243LU875E5.groups.com.apple.podcasts"),
+	}
+	for _, path := range append(append([]string{}, owned...), shared...) {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	word := FindRelatedPaths(AppEntry{
+		Path:     filepath.Join(home, "Applications", "Microsoft Word.app"),
+		Name:     "Microsoft Word",
+		BundleID: "com.microsoft.Word",
+	})
+	testFlight := FindRelatedPaths(AppEntry{
+		Path:     filepath.Join(home, "Applications", "TestFlight.app"),
+		Name:     "TestFlight",
+		BundleID: "com.apple.TestFlight",
+	})
+	for _, path := range owned[:2] {
+		if !containsString(word, path) {
+			t.Fatalf("Word plan missing its own group container %q: %#v", path, word)
+		}
+	}
+	if !containsString(testFlight, owned[2]) {
+		t.Fatalf("TestFlight plan missing its own group container %q: %#v", owned[2], testFlight)
+	}
+	for _, path := range shared {
+		if containsString(word, path) || containsString(testFlight, path) {
+			t.Fatalf("vendor-shared group container %q was claimed:\nword=%#v\ntestflight=%#v", path, word, testFlight)
+		}
 	}
 }
 
@@ -864,17 +932,6 @@ func TestLooksLikeBundleIDRequiresReverseDNSComponents(t *testing.T) {
 	for _, id := range invalid {
 		if looksLikeBundleID(id) {
 			t.Fatalf("looksLikeBundleID(%q) = true, want false", id)
-		}
-	}
-}
-
-func TestBundleDomainPrefixRequiresProductComponent(t *testing.T) {
-	if got := bundleDomainPrefix("com.example.foo"); got != "com.example" {
-		t.Fatalf("bundleDomainPrefix valid = %q, want com.example", got)
-	}
-	for _, id := range []string{"com", "com.example", "com..example.foo", "com.*.foo"} {
-		if got := bundleDomainPrefix(id); got != "" {
-			t.Fatalf("bundleDomainPrefix(%q) = %q, want empty", id, got)
 		}
 	}
 }

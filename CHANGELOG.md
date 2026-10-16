@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Fixed
+
+- Stop `bm uninstall` from claiming other apps' Group Containers and bundle-ID data: a leftover must carry the app's complete bundle ID on dot boundaries, so vendor-shared containers such as Microsoft's OneAuth, Entra, Defender, and Office shared containers, or Podcasts' container for TestFlight, are no longer removed together with one product.
+
 ## v0.6.26 - 2026-09-07
 
 ### Added
