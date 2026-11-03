@@ -75,6 +75,8 @@ Homebrew casks and other `.app` bundles are handled by `bm uninstall`, which inc
 
 Google's `~/Library/Caches/GIPPseudonymousID` identity store and `~/Library/Caches/CCTClearcutLogger` log queue are never cleaned: their names carry no owner bundle ID, and removing them while Gemini runs starts an unbounded disk write loop.
 
+Jupyter's `~/.jupyter/runtime` folder is never cleaned: its files are the connection details of running servers and kernels, not a cache.
+
 Crash reports inside `~/Library/Logs/DiagnosticReports` are cleanable, but the directory itself stays: macOS's crash reporter cannot recreate it under its sandbox and would silently stop saving later reports.
 
 The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. The pip and Yarn v1 rows include the macOS cache locations those tools actually use under `~/Library/Caches`. A Bun row protects Bun's install cache in `~/.bun/install/cache`. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.

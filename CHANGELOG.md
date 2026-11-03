@@ -26,6 +26,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Match an app's executable name literally when `bm uninstall` checks whether the app runs. `pgrep` read the name as a regular expression, so a name with parentheses failed to compile and the app looked closed, which skipped quitting it before its bundle moved to Trash; a name such as `.*` matched every process.
 - Hold VS Code's caches while VS Code runs. `bm clean` moved its `Cache`, `CachedData`, `GPUCache`, and `CachedExtensionVSIXs` folders under `~/Library/Application Support/Code` out from under the running editor, because its processes run as `Electron` and no owner check covered that folder. They now wait until no process from `Visual Studio Code.app` and no `Code Helper` process runs.
 - Offer a whitelist row for Bun's install cache. `bm clean` cleans `~/.bun/install/cache`, but the whitelist menu had no row for it, so it could be kept only by editing the config by hand.
+- Stop cleaning Jupyter's runtime folder. `bm clean` treated `~/.jupyter/runtime` as a cache and moved the connection files of running servers and kernels, which broke `jupyter server list`, `--existing`, and editor reconnects. The folder is now protected, and its whitelist row, which doubled as the clean rule, is gone.
 
 ## v0.6.27 - 2026-10-16
 

@@ -433,7 +433,6 @@ func TestRunCleanTargetsMoleCompatibleDeveloperCaches(t *testing.T) {
 		filepath.Join(home, ".cache", "webpack", "cache.bin"),
 		filepath.Join(home, ".cache", "node-gyp", "headers.tar.gz"),
 		filepath.Join(home, ".pyenv", "cache", "Python-3.12.0.tar.xz"),
-		filepath.Join(home, ".jupyter", "runtime", "kernel.json"),
 		filepath.Join(home, ".gem", "specs", "rubygems.org%443", "latest_specs.4.8"),
 		filepath.Join(home, ".gem", "ruby", "3.3.0", "cache", "rake.gem"),
 		filepath.Join(home, ".bundle", "cache", "compact_index", "rubygems.org.versions"),
@@ -805,6 +804,7 @@ func TestRunCleanAllowsContainedCacheBelowSymlinkedCargoHome(t *testing.T) {
 func TestCleanWhitelistInventoryExcludesDurableDeveloperState(t *testing.T) {
 	items := CleanWhitelistItems()
 	for _, unwanted := range []string{
+		"~/.jupyter/runtime/*",
 		"~/.m2/repository/*",
 		"~/go/pkg/mod/*",
 		"~/.sbt/*",
@@ -851,6 +851,8 @@ func TestRunCleanPreservesDurableDeveloperStateAndTargetsPreciseRebuildableCache
 
 	durable := []string{
 		filepath.Join(home, ".cache", "huggingface", "hub", "model.bin"),
+		filepath.Join(home, ".jupyter", "runtime", "jpserver-4242.json"),
+		filepath.Join(home, ".jupyter", "runtime", "kernel-5f2e.json"),
 		filepath.Join(home, ".cache", "torch", "hub", "model.pt"),
 		filepath.Join(home, ".cache", "tensorflow", "datasets", "dataset.bin"),
 		filepath.Join(home, ".cache", "wandb", "run-state.bin"),

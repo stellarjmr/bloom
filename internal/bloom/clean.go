@@ -171,7 +171,6 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Flutter SDK cache", Pattern: "~/.cache/flutter/*", Category: "compiler_cache"},
 		{Label: "Swift Package Manager cache", Pattern: "~/.cache/swift-package-manager/*", Category: "compiler_cache"},
 		{Label: "Zig compiler cache", Pattern: "~/.cache/zig/*", Category: "compiler_cache"},
-		{Label: "Jupyter runtime files", Pattern: "~/.jupyter/runtime/*", Category: "compiler_cache"},
 		{Label: "CocoaPods cache (iOS dependencies)", Pattern: "~/Library/Caches/CocoaPods/*", Category: "package_manager"},
 		{Label: "npm package cache", Pattern: "~/.npm/_cacache/*", Category: "package_manager"},
 		{Label: "pip Python package cache", Pattern: "~/.cache/pip/*", Category: "package_manager"},
@@ -1632,6 +1631,9 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		ollamaRoot,
 		filepath.Join(home, "Library", "Caches", "llama.cpp"),
 		llamaRoot,
+		// Jupyter's runtime folder holds the connection files of running
+		// servers and kernels (jpserver-<pid>.json, kernel-<id>.json).
+		filepath.Join(home, ".jupyter", "runtime"),
 		filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv"),
 		renvRoot,
 		filepath.Join(cargoHome, "registry", "src"),
