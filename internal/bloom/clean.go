@@ -818,6 +818,16 @@ func cleanProcessGuardForPath(path string) (string, []string) {
 			roots:    []string{filepath.Join(home, ".bun", "install", "cache")},
 			programs: []string{"bun", "bunx"},
 		},
+		// VS Code keeps its Chromium caches in its Application Support folder.
+		// Its main process runs as Electron, a name every Electron app shares,
+		// so the guard matches the bundle path, and Code Helper, which keeps a
+		// renamed bundle held. VS Code Insiders, with its own bundle name and
+		// "Code - Insiders Helper", uses its own folder and matches neither.
+		{
+			family:   "VS Code",
+			roots:    []string{filepath.Join(home, "Library", "Application Support", "Code")},
+			programs: []string{"visual studio code.app", "code helper"},
+		},
 	}
 	for _, guard := range guards {
 		for _, root := range guard.roots {

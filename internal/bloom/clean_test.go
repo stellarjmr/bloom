@@ -563,6 +563,11 @@ func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
 			command: filepath.Join(home, ".bun", "bin", "bunx") + " vite",
 			family:  "Bun",
 		},
+		{
+			path:    filepath.Join(home, "Library", "Application Support", "Code", "GPUCache", "data_0"),
+			command: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (GPU).app/Contents/MacOS/Code Helper (GPU) --type=gpu-process",
+			family:  "VS Code",
+		},
 	}
 
 	for _, test := range tests {
@@ -1683,5 +1688,67 @@ func TestRunCleanHoldsUvAndBunCachesWhileTheyRun(t *testing.T) {
 	}
 	if cleanResultContains(busy, bunCache) || !cleanResultSkippedFor(busy, bunCache, "Bun is running") {
 		t.Fatalf("Bun cache was not held while bun runs: targets=%#v skipped=%#v", busy.Targets, busy.Skipped)
+	}
+}
+
+func TestRunCleanHoldsVSCodeCachesWhileVSCodeRuns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	code := filepath.Join(home, "Library", "Application Support", "Code")
+	caches := []string{
+		filepath.Join(code, "Cache", "Cache_Data"),
+		filepath.Join(code, "CachedData", "1a2b3c"),
+		filepath.Join(code, "GPUCache", "data_0"),
+		filepath.Join(code, "CachedExtensionVSIXs", "ms-python.python-2026.1.0"),
+	}
+	for _, dir := range caches {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "blob"), []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	run := func(table string) CleanResult {
+		return RunClean(context.Background(), CleanOptions{
+			DryRun: true,
+			Config: cfg,
+			Runner: &cleanProbeRunner{processTables: []string{table}},
+		})
+	}
+
+	// Another Electron app, VS Code Insiders, or another app's helper leaves
+	// stable's caches free.
+	for _, table := range []string{
+		"/sbin/launchd\n",
+		"/sbin/launchd\n/Applications/Other.app/Contents/MacOS/Electron\n",
+		"/sbin/launchd\n/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Electron\n",
+		"/sbin/launchd\n/Applications/Visual Studio Code - Insiders.app/Contents/Frameworks/Code - Insiders Helper (GPU).app/Contents/MacOS/Code - Insiders Helper (GPU) --type=gpu-process\n",
+		"/sbin/launchd\n/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (GPU).app/Contents/MacOS/Cursor Helper (GPU) --type=gpu-process\n",
+		"/sbin/launchd\n/Applications/Xcode.app/Contents/Developer/usr/bin/xcode helper\n",
+	} {
+		res := run(table)
+		for _, dir := range caches {
+			if !cleanResultCovers(res, dir) {
+				t.Fatalf("with %q, idle VS Code cache %q missing: targets=%#v skipped=%#v", table, dir, res.Targets, res.Skipped)
+			}
+		}
+	}
+	for _, table := range []string{
+		"/sbin/launchd\n/Applications/Visual Studio Code.app/Contents/MacOS/Electron\n",
+		// A renamed bundle still runs VS Code's helpers.
+		"/sbin/launchd\n/Applications/VS Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer) --type=renderer\n",
+	} {
+		busy := run(table)
+		for _, dir := range caches {
+			if cleanResultCovers(busy, dir) {
+				t.Fatalf("with %q, VS Code cache %q was targeted: %#v", table, dir, busy.Targets)
+			}
+		}
+		if !cleanResultSkippedFor(busy, filepath.Join(code, "GPUCache", "data_0"), "VS Code is running") {
+			t.Fatalf("with %q, VS Code cache not reported as held: %#v", table, busy.Skipped)
+		}
 	}
 }

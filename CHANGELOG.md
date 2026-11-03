@@ -24,6 +24,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Hold uv's and Bun's caches while they are in use. `bm clean` moved entries of `~/.cache/uv` out from under tools and MCP servers that `uvx` runs from that cache, and Bun's install cache during a `bun install`. Both now wait until no `uv`, `uvx`, `bun`, or `bunx` process runs.
 - List the live app instead of a hidden backup in `bm uninstall`. A `.Aegis-backup-1.app` copy that a manual reinstall left beside `Aegis.app` shares its Bundle ID and could win the duplicate check, so the menu showed the backup, uninstalling removed only that copy, and the real app stayed hidden. A dot-named copy now ranks below every visible one and is listed only when no visible copy exists.
 - Match an app's executable name literally when `bm uninstall` checks whether the app runs. `pgrep` read the name as a regular expression, so a name with parentheses failed to compile and the app looked closed, which skipped quitting it before its bundle moved to Trash; a name such as `.*` matched every process.
+- Hold VS Code's caches while VS Code runs. `bm clean` moved its `Cache`, `CachedData`, `GPUCache`, and `CachedExtensionVSIXs` folders under `~/Library/Application Support/Code` out from under the running editor, because its processes run as `Electron` and no owner check covered that folder. They now wait until no process from `Visual Studio Code.app` and no `Code Helper` process runs.
 
 ## v0.6.27 - 2026-10-16
 

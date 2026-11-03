@@ -83,7 +83,7 @@ Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, in
 
 Bloom also keeps complete dependency, toolchain, model, and environment stores off the automatic clean path. This includes Maven repositories, Go modules, SBT/Ivy and Cabal state, Conda package roots, Ollama models, llama.cpp's downloaded models (`~/Library/Caches/llama.cpp`, or `LLAMA_CACHE`), R renv libraries, downloaded model/data stores, Deno state, and Poetry virtual environments. Precise rebuildable leaves such as Go build output and Poetry's macOS `artifacts` and package-download `cache` children remain eligible independently.
 
-uv's cache (`~/.cache/uv`) and Bun's install cache (`~/.bun/install/cache`) wait while `uv`, `uvx`, `bun`, or `bunx` runs, including tools and MCP servers that `uvx` started from environments inside the uv cache.
+uv's cache (`~/.cache/uv`) and Bun's install cache (`~/.bun/install/cache`) wait while `uv`, `uvx`, `bun`, or `bunx` runs, including tools and MCP servers that `uvx` started from environments inside the uv cache. VS Code's Chromium caches under `~/Library/Application Support/Code` likewise wait while a process from `Visual Studio Code.app` or a `Code Helper` process runs, which also covers a renamed bundle.
 
 pnpm cleanup covers store generations under both `~/Library/pnpm/store` and the mise/XDG-style `~/.local/share/pnpm/store`. Bloom moves each generation to Trash and skips both roots while pnpm or Corepack is active; redirected roots still fail path validation.
 
