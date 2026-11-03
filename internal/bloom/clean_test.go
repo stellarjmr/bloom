@@ -1752,3 +1752,64 @@ func TestRunCleanHoldsVSCodeCachesWhileVSCodeRuns(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanWhitelistRowProtectsTheBunCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	const row = "~/.bun/install/cache/*"
+	entry := filepath.Join(home, ".bun", "install", "cache", "react@19.0.0", "package.json")
+	control := filepath.Join(home, "Library", "Caches", "DropApp", "entry")
+	for _, path := range []string{entry, control} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	offered := 0
+	for _, item := range CleanWhitelistItems() {
+		if item.Pattern == row {
+			offered++
+		}
+	}
+	if offered != 1 {
+		t.Fatalf("whitelist menu offers %q %d times, want once", row, offered)
+	}
+	rules := 0
+	for _, rule := range defaultCleanRules() {
+		if rule.Pattern == row {
+			rules++
+		}
+	}
+	if rules != 1 {
+		t.Fatalf("the Bun cache rule appears %d times, want once", rules)
+	}
+
+	idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	unprotected := DefaultConfig()
+	unprotected.Clean.Whitelist = nil
+	if res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: unprotected, Runner: idle}); !cleanResultCovers(res, entry) {
+		t.Fatalf("without a whitelist, clean does not reach %q: %#v", entry, res.Targets)
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	if err := SetCleanWhitelist(&cfg, []string{row}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: saved, Runner: idle})
+	if cleanResultCovers(res, entry) {
+		t.Fatalf("ticking %q left %q cleanable: %#v", row, entry, res.Targets)
+	}
+	if !cleanResultCovers(res, control) {
+		t.Fatalf("ticking %q also protected unrelated caches: %#v", row, res.Targets)
+	}
+}

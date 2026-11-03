@@ -187,6 +187,9 @@ func CleanWhitelistItems() []CleanItem {
 		{Label: "Yarn v1 package cache (Library/Caches)", Pattern: "~/Library/Caches/Yarn/*", Category: "package_manager"},
 		{Label: "pnpm package store", Pattern: "~/Library/pnpm/store/*", Category: "package_manager"},
 		{Label: "pnpm package store (mise/XDG)", Pattern: "~/.local/share/pnpm/store/*", Category: "package_manager"},
+		// Bun's install cache is a clean rule of its own; without a row it
+		// could only be protected by editing the config by hand.
+		{Label: "Bun package cache", Pattern: "~/.bun/install/cache/*", Category: "package_manager"},
 		{Label: "Composer PHP dependencies cache (legacy)", Pattern: "~/.composer/cache/*", Category: "package_manager"},
 		{Label: "Composer PHP dependencies cache", Pattern: "~/Library/Caches/composer/*", Category: "package_manager"},
 		{Label: "RubyGems cache", Pattern: "~/.gem/cache/*", Category: "package_manager"},
