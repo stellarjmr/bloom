@@ -23,6 +23,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Refuse to move TeamViewer, Adobe Genuine Service, Alibaba Cloud Security, and the Avast, AVG, Malwarebytes, Bitdefender, Intego, Kaspersky, Norton, and Trend Micro security apps to Trash, and point to the vendor's own uninstaller instead: moving only the app left their daemons, helpers, or system extensions running. The Bitdefender, Intego, Norton, and Trend Micro bundle IDs are not yet confirmed against the shipping apps.
 - Hold uv's and Bun's caches while they are in use. `bm clean` moved entries of `~/.cache/uv` out from under tools and MCP servers that `uvx` runs from that cache, and Bun's install cache during a `bun install`. Both now wait until no `uv`, `uvx`, `bun`, or `bunx` process runs.
 - List the live app instead of a hidden backup in `bm uninstall`. A `.Aegis-backup-1.app` copy that a manual reinstall left beside `Aegis.app` shares its Bundle ID and could win the duplicate check, so the menu showed the backup, uninstalling removed only that copy, and the real app stayed hidden. A dot-named copy now ranks below every visible one and is listed only when no visible copy exists.
+- Match an app's executable name literally when `bm uninstall` checks whether the app runs. `pgrep` read the name as a regular expression, so a name with parentheses failed to compile and the app looked closed, which skipped quitting it before its bundle moved to Trash; a name such as `.*` matched every process.
 
 ## v0.6.27 - 2026-10-16
 

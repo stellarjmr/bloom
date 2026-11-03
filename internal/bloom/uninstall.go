@@ -2096,7 +2096,7 @@ func processIDs(ctx context.Context, runner Runner, name string) []string {
 	if name == "" {
 		return nil
 	}
-	out := runner.Run(ctx, "/usr/bin/pgrep", "-x", name)
+	out := runner.Run(ctx, "/usr/bin/pgrep", "-x", "--", processPatternLiteral(name))
 	if out.Err != nil {
 		return nil
 	}
@@ -2107,6 +2107,24 @@ func processIDs(ctx context.Context, runner Runner, name string) []string {
 		}
 	}
 	return pids
+}
+
+// processPatternLiteral escapes the POSIX extended regular expression
+// characters pgrep reads in its pattern, so CFBundleExecutable, which the app
+// controls, matches only a process of exactly that name: unescaped, "Foo (Beta"
+// failed to compile and read as not running, and ".*" matched every process.
+// A backslash before any other byte is undefined in POSIX ERE, so only these
+// are escaped. They are all ASCII, so the name is walked byte by byte and any
+// other byte, a control byte included, stays as it is and matches itself.
+func processPatternLiteral(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if strings.IndexByte(`[](){}.^$*+?|\`, name[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(name[i])
+	}
+	return b.String()
 }
 
 func looksLikePID(s string) bool {
