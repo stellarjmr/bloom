@@ -917,6 +917,9 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 		} else if res.SharedBundleUncertain {
 			fmt.Fprintln(a.Out, "   kept shared app data because the installed-copy scan could not be completed")
 		}
+		for _, item := range res.KeptData {
+			fmt.Fprintf(a.Out, "   kept %s, %s\n", item.Path, item.Reason)
+		}
 		if res.AppReturned {
 			fmt.Fprintf(a.Out, "   kept everything not yet removed because %s reappeared during uninstall\n", res.App.Path)
 		} else if res.AppPathErr != nil {

@@ -60,6 +60,9 @@ type UninstallResult struct {
 	SharedBundleSibling   bool
 	SharedBundleUncertain bool
 	SiblingPaths          []string
+	// KeptData lists protected folders the app's leftover rules matched and
+	// uninstall left in place.
+	KeptData []UninstallKeptPath
 	// AppReturned records that something reappeared at the app path after
 	// the bundle moved to Trash; the remaining data was left to that copy.
 	AppReturned bool
@@ -543,13 +546,68 @@ func bundleIDEqual(id, want string) bool {
 	return strings.EqualFold(id, want)
 }
 
+// UninstallKeptPath is a matched leftover that uninstall keeps because it
+// holds the user's own content rather than app state.
+type UninstallKeptPath struct {
+	Path   string
+	Reason string
+}
+
+type protectedUninstallDataRoot struct {
+	path   string
+	reason string
+}
+
+func protectedUninstallDataRoots(home string) []protectedUninstallDataRoot {
+	return []protectedUninstallDataRoot{
+		// Steam's name match reaches this folder, which holds the installed
+		// game library (steamapps) and local saves (userdata). The steam
+		// cask's zap lists it too.
+		{path: filepath.Join(home, "Library", "Application Support", "Steam"), reason: "the Steam library with installed games and saves"},
+	}
+}
+
+// protectedUninstallData reports the protected root that path is or lies
+// inside, compared case-insensitively like the default APFS volume.
+func protectedUninstallData(path string) (UninstallKeptPath, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return UninstallKeptPath{}, false
+	}
+	path = filepath.Clean(path)
+	for _, root := range protectedUninstallDataRoots(home) {
+		rootPath := filepath.Clean(root.path)
+		if strings.EqualFold(path, rootPath) ||
+			(len(path) > len(rootPath) && path[len(rootPath)] == os.PathSeparator && strings.EqualFold(path[:len(rootPath)], rootPath)) {
+			return UninstallKeptPath{Path: rootPath, Reason: root.reason}, true
+		}
+	}
+	return UninstallKeptPath{}, false
+}
+
+func protectedDataZapRefusal(cask string, kept []UninstallKeptPath) error {
+	parts := make([]string, 0, len(kept))
+	for _, item := range kept {
+		parts = append(parts, item.Path+" ("+item.Reason+")")
+	}
+	return fmt.Errorf("refusing Homebrew --zap for %s because it would also remove %s; run brew uninstall --cask %s without --zap to keep it",
+		cask, strings.Join(parts, ", "), cask)
+}
+
 // FindRelatedPaths returns every cleanup candidate for the given app.
 // Includes the bundle itself, then standard ~/Library subdirectories that
 // match by bundle id or app basename. Paths are de-duplicated and ordered.
 func FindRelatedPaths(app AppEntry) []string {
+	paths, _ := findRelatedPaths(app)
+	return paths
+}
+
+// findRelatedPaths is FindRelatedPaths that also reports the protected
+// folders the app's leftover rules matched and kept.
+func findRelatedPaths(app AppEntry) ([]string, []UninstallKeptPath) {
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		return []string{app.Path}
+		return []string{app.Path}, nil
 	}
 
 	paths := []string{app.Path}
@@ -603,7 +661,9 @@ func FindRelatedPaths(app AppEntry) []string {
 
 	// Keep only existing paths and dedupe.
 	seen := map[string]bool{}
+	keptSeen := map[string]bool{}
 	var out []string
+	var kept []UninstallKeptPath
 	for _, p := range paths {
 		if p == "" || isHomeConfigPath(p) || isSharedDeveloperRoot(p) || seen[p] {
 			continue
@@ -612,10 +672,17 @@ func FindRelatedPaths(app AppEntry) []string {
 		if _, err := os.Lstat(p); err != nil {
 			continue
 		}
+		if item, ok := protectedUninstallData(p); ok {
+			if !keptSeen[item.Path] {
+				keptSeen[item.Path] = true
+				kept = append(kept, item)
+			}
+			continue
+		}
 		out = append(out, p)
 	}
 
-	return out
+	return out, kept
 }
 
 // leftoverNameToken returns the app bundle name used for literal leftover
@@ -1087,8 +1154,14 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			paths = append(paths, app.Path)
 		}
 	} else {
-		paths = FindRelatedPaths(app)
+		paths, res.KeptData = findRelatedPaths(app)
 		loginItemHelpers = discoverLoginItemHelperBundleIDs(app.Path)
+		// The cask's zap reaches the same folders by name, so a protected
+		// folder that Bloom's own rules matched must not meet --zap either.
+		if cask != "" && len(res.KeptData) > 0 {
+			res.Err = protectedDataZapRefusal(cask, res.KeptData)
+			return res
+		}
 	}
 	pathSizes := make(map[string]int64, len(paths))
 	appBundlePlanned := false
@@ -1142,6 +1215,13 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		if cask != "" && (res.SharedBundleSibling || res.SharedBundleUncertain) {
 			res.Err = sharedBundleZapRefusal(app, res)
 			return res
+		}
+		if cask != "" {
+			if _, liveKept := findRelatedPaths(app); len(liveKept) > 0 {
+				res.KeptData = liveKept
+				res.Err = protectedDataZapRefusal(cask, liveKept)
+				return res
+			}
 		}
 
 		if !sharedBundleData {
@@ -2235,6 +2315,9 @@ var errTrashMoveStopped = errors.New("Trash move stopped by its guard")
 // between them. Once it reports false, the move stops with
 // errTrashMoveStopped and leaves p as it is.
 func movePathToTrashStubbornGuarded(ctx context.Context, runner Runner, p, expectedIdentity string, allowed func() bool) error {
+	if item, ok := protectedUninstallData(p); ok {
+		return fmt.Errorf("refusing to move %s: %s", item.Path, item.Reason)
+	}
 	stopped := func() bool { return allowed != nil && !allowed() }
 	if stopped() {
 		return errTrashMoveStopped
