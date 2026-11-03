@@ -268,20 +268,33 @@ func dedupeAppEntriesByBundleID(apps []AppEntry, home string) []AppEntry {
 	return out
 }
 
+// hiddenAppBundle reports a bundle whose name starts with a dot, such as the
+// .Aegis-backup-1.app copy a manual reinstall leaves beside Aegis.app.
+func hiddenAppBundle(path string) bool {
+	return strings.HasPrefix(filepath.Base(filepath.Clean(path)), ".")
+}
+
+// appScanPreferenceRank orders copies that share a bundle ID, lowest first.
+// A hidden bundle ranks below every visible one wherever it sits, so the menu
+// lists the live app rather than a backup; one with no visible twin stays.
 func appScanPreferenceRank(path, home string) int {
 	cleaned := filepath.Clean(path)
 	roots := expandedAppScanRoots(home)
+	hidden := 0
+	if hiddenAppBundle(cleaned) {
+		hidden = len(roots)*2 + 1
+	}
 	for i, root := range roots {
 		if appPathIsDirectChildOfRoot(cleaned, root) {
-			return i
+			return hidden + i
 		}
 	}
 	for i, root := range roots {
 		if pathIsWithinRoot(cleaned, root) {
-			return len(roots) + i
+			return hidden + len(roots) + i
 		}
 	}
-	return len(roots) * 2
+	return hidden + len(roots)*2
 }
 
 func expandedAppScanRoots(home string) []string {

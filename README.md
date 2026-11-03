@@ -109,6 +109,7 @@ The interactive flow lives at menu item 3:
 
 - All apps start unselected. `Space` toggles. `Enter` removes the cursor item when nothing is selected, or every selected item otherwise.
 - Each row shows the app name, physical on-disk size, and last-used time (`kMDItemLastUsedDate`, with bundle mtime as a fallback). CJK and fullwidth names align by display width.
+- Copies that share a Bundle ID are listed once. A hidden copy whose name starts with a dot, such as the `.Aegis-backup-1.app` a manual reinstall can leave beside `Aegis.app`, never stands in for the visible app; it is listed only when no visible copy exists.
 - The summary lists every removed path under each app (`✓` removed, `·` would-remove).
 
 Per-app cleanup runs in this order so brew can detect and clean its own metadata and cask-defined zap leftovers:

@@ -316,6 +316,26 @@ func TestDedupeAppEntriesByBundleIDPrefersLiveRoots(t *testing.T) {
 	}
 }
 
+func TestDedupeAppEntriesByBundleIDPrefersTheVisibleAppOverAHiddenBackup(t *testing.T) {
+	home := filepath.Join(string(os.PathSeparator), "Users", "test")
+	apps := []AppEntry{
+		// ReadDir order puts the dot name first, and /Applications outranks
+		// ~/Applications, yet the live app must win.
+		{Path: "/Applications/.Aegis-backup-1.app", Name: ".Aegis-backup-1", BundleID: "com.example.aegis"},
+		{Path: filepath.Join(home, "Applications", "Aegis.app"), Name: "Aegis", BundleID: "com.example.aegis"},
+		{Path: "/Applications/.Solo.app", Name: ".Solo", BundleID: "com.example.solo"},
+		{Path: "/Applications/.Solo-backup.app", Name: ".Solo-backup", BundleID: "com.example.solo"},
+	}
+
+	got := dedupeAppEntriesByBundleID(apps, home)
+	if len(got) != 2 || got[0].Path != filepath.Join(home, "Applications", "Aegis.app") {
+		t.Fatalf("deduped apps = %#v, want the visible Aegis.app", got)
+	}
+	if got[1].Path != "/Applications/.Solo.app" {
+		t.Fatalf("a hidden app without a visible twin must stay listed: %#v", got)
+	}
+}
+
 func TestDedupeAppEntriesByBundleIDTreatsSetappAsLiveRoot(t *testing.T) {
 	home := filepath.Join(string(os.PathSeparator), "Users", "test")
 	apps := []AppEntry{
