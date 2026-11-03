@@ -142,6 +142,21 @@ var officialUninstallerRules = []officialUninstallerRule{
 	{Vendor: "SentinelOne", BundlePrefixes: []string{"com.sentinelone.", "com.sentinel-labs."}, NameFragments: []string{"sentinelone", "sentinel agent"}},
 	{Vendor: "GlobalProtect", BundlePrefixes: []string{"com.paloaltonetworks."}, NameFragments: []string{"globalprotect"}},
 	{Vendor: "Cisco", BundlePrefixes: []string{"com.cisco.anyconnect", "com.cisco.secureclient"}, NameFragments: []string{"cisco secure client", "cisco anyconnect"}},
+	// Each of these leaves a root daemon, privileged helper, or system
+	// extension behind when only the app moves to Trash. The IDs follow
+	// Mole's list; the Bitdefender, Intego, Norton, and Trend Micro ones are
+	// unconfirmed there, and a wrong ID only matches nothing.
+	{Vendor: "TeamViewer", BundlePrefixes: []string{"com.teamviewer."}},
+	{Vendor: "Adobe Genuine Service", BundlePrefixes: []string{"com.adobe.gcclient", "gocart."}, NameFragments: []string{"adobe genuine service"}},
+	{Vendor: "Avast", BundlePrefixes: []string{"com.avast.aafm", "com.avast.avast", "com.avast.hub"}},
+	{Vendor: "AVG", BundlePrefixes: []string{"com.avg.hub"}, NameFragments: []string{"avgantivirus", "avg antivirus"}},
+	{Vendor: "Malwarebytes", BundlePrefixes: []string{"com.malwarebytes.mbam"}},
+	{Vendor: "Bitdefender", BundlePrefixes: []string{"com.bitdefender.antivirusformac"}},
+	{Vendor: "Intego", BundlePrefixes: []string{"com.intego.virusbarrier.", "com.intego.virusbarrier-", "com.intego.app.netbarrier"}},
+	{Vendor: "Kaspersky", BundlePrefixes: []string{"com.kaspersky.kav"}},
+	{Vendor: "Norton", BundlePrefixes: []string{"com.symantec.nfm"}},
+	{Vendor: "Trend Micro", BundlePrefixes: []string{"com.trendmicro.tmsm", "com.trendmicro.icore"}},
+	{Vendor: "Alibaba Cloud Security", BundlePrefixes: []string{"com.alibaba.security."}},
 }
 
 // ScanApplications walks the standard macOS application directories and
