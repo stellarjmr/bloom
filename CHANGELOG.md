@@ -10,6 +10,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+### Added
+
+- Update Claude Code's native install with `claude update` as the new `claude` task. A Homebrew cask or npm copy is skipped because the `cask` and `npm` tasks already update it, and configs saved by earlier versions pick the task up unless their `order` was curated by hand.
+
 ## v0.6.27 - 2026-10-16
 
 ### Fixed

@@ -284,3 +284,96 @@ func TestSaveConfigRoundTripsEnabledTasksAndInclude(t *testing.T) {
 		t.Fatalf("npm include = %#v", got.Tasks["npm"].Include)
 	}
 }
+
+func loadTestConfig(t *testing.T, content string) Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestLoadConfigAddsIntroducedTaskToAnOrderSavedBeforeIt(t *testing.T) {
+	// The layout every config written before the claude task was added has.
+	cfg := loadTestConfig(t, `
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
+
+[tasks.amp]
+enabled = true
+
+[tasks.npm]
+enabled = true
+include = []
+exclude = []
+`)
+	if !reflect.DeepEqual(cfg.TaskOrder, DefaultTaskNames()) {
+		t.Fatalf("TaskOrder = %#v, want %#v", cfg.TaskOrder, DefaultTaskNames())
+	}
+	if !cfg.Tasks["claude"].Enabled {
+		t.Fatal("an introduced task must start enabled")
+	}
+	if text := ConfigText(cfg); !strings.Contains(text, "[tasks.claude]\nenabled = true\n") {
+		t.Fatalf("saving the migrated config dropped the claude section:\n%s", text)
+	}
+}
+
+func TestLoadConfigPlacesIntroducedTaskWithinACustomArrangement(t *testing.T) {
+	cfg := loadTestConfig(t, `
+[tasks]
+order = ["npm", "amp", "brew", "cask", "yazi", "nvim", "mason"]
+`)
+	want := []string{"npm", "amp", "claude", "brew", "cask", "yazi", "nvim", "mason"}
+	if !reflect.DeepEqual(cfg.TaskOrder, want) {
+		t.Fatalf("TaskOrder = %#v, want %#v", cfg.TaskOrder, want)
+	}
+}
+
+func TestLoadConfigKeepsCuratedOrdersAndKnownTasks(t *testing.T) {
+	cases := map[string]string{
+		"curated order leaves an older task out": `
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason"]
+`,
+		"a claude section means the config already knows the task": `
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
+
+[tasks.claude]
+enabled = true
+`,
+		"a disabled claude section opts out": `
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason", "npm"]
+
+[tasks.claude]
+enabled = false
+`,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := loadTestConfig(t, content)
+			if containsString(cfg.TaskOrder, "claude") {
+				t.Fatalf("TaskOrder = %#v, want it kept as written", cfg.TaskOrder)
+			}
+			// An unrelated save, such as a whitelist change, must keep the
+			// marker, or the next load would add claude back as enabled.
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := SaveConfig(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			saved, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if containsString(saved.TaskOrder, "claude") || saved.Tasks["claude"].Enabled {
+				t.Fatalf("after a save TaskOrder = %#v, claude enabled = %v; want claude still left out", saved.TaskOrder, saved.Tasks["claude"].Enabled)
+			}
+		})
+	}
+}

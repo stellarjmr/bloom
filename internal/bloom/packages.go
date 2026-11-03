@@ -76,7 +76,7 @@ func ListTaskPackages(ctx context.Context, r Runner, task string) ([]string, err
 			return nil, out.Err
 		}
 		return mapNames(parseNPMGlobals(out.Stdout)), nil
-	case "amp":
+	case "amp", "claude":
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown task %q", task)

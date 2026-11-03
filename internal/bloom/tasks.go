@@ -70,6 +70,12 @@ var builtinTasks = map[string]Task{
 		RequiredCommand: "amp",
 		Run:             runAmp,
 	},
+	"claude": {
+		Name:            "claude",
+		Description:     "Update the native Claude Code install",
+		RequiredCommand: "claude",
+		Run:             runClaude,
+	},
 	"yazi": {
 		Name:            "yazi",
 		Description:     "Update Yazi plugins and flavors",
@@ -385,6 +391,88 @@ func runAmp(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
 		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{"amp"}}
 	}
 	return TaskResult{Status: StatusOK}
+}
+
+func runClaude(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
+	path, err := r.LookPath("claude")
+	if err != nil {
+		return TaskResult{Status: StatusSkipped}
+	}
+	if reason := claudeInstallSkipReason(path); reason != "" {
+		return TaskResult{Status: StatusSkipped, Message: reason}
+	}
+	if opts.DryRun {
+		return TaskResult{Status: StatusDryRun, Message: "claude update"}
+	}
+	before := strings.TrimSpace(r.Run(ctx, "claude", "--version").Stdout)
+	update := r.Run(ctx, "claude", "update")
+	if update.Err != nil {
+		return failed(update)
+	}
+	after := strings.TrimSpace(r.Run(ctx, "claude", "--version").Stdout)
+	if before != "" && after != "" && before != after {
+		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{"claude"}}
+	}
+	return TaskResult{Status: StatusOK}
+}
+
+// claudeInstallSkipReason reports why the claude task leaves the executable at
+// path alone, or "" when Claude Code's own installer owns it. claude update
+// hands a Homebrew or npm install to that package manager, which the cask and
+// npm tasks already run, so only two layouts qualify: the native launcher,
+// which resolves into $XDG_DATA_HOME/claude/versions (by default
+// ~/.local/share/claude/versions), and the legacy local install under
+// ~/.claude/local, which no Bloom package task updates.
+func claudeInstallSkipReason(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "install could not be resolved"
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+		if pathBelowDirectory(resolved, claudeVersionsDir(home)) ||
+			pathBelowDirectory(resolved, filepath.Join(home, ".claude", "local")) {
+			return ""
+		}
+	}
+	for _, part := range strings.Split(resolved, string(os.PathSeparator)) {
+		switch part {
+		case "Caskroom", "Cellar":
+			return "managed by Homebrew"
+		case "node_modules":
+			return "managed by npm"
+		}
+	}
+	return "not a native install"
+}
+
+func claudeVersionsDir(home string) string {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if !filepath.IsAbs(dataHome) {
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataHome, "claude", "versions")
+}
+
+// pathBelowDirectory reports whether the resolved path lies below dir. Each
+// ancestor is compared by filesystem identity, so a dir reached through a
+// symlink or spelled with different case on a case-insensitive volume still
+// counts.
+func pathBelowDirectory(path, dir string) bool {
+	want, err := os.Stat(dir)
+	if err != nil || !want.IsDir() {
+		return false
+	}
+	current := filepath.Dir(path)
+	for {
+		if info, err := os.Stat(current); err == nil && os.SameFile(info, want) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {

@@ -25,7 +25,12 @@ type TaskConfig struct {
 	InstallHint string
 }
 
-var defaultTaskOrder = []string{"brew", "cask", "amp", "yazi", "nvim", "mason", "npm"}
+var defaultTaskOrder = []string{"brew", "cask", "amp", "claude", "yazi", "nvim", "mason", "npm"}
+
+// introducedTasks lists the default tasks added after configs started saving
+// an explicit order, oldest first. withIntroducedTasks uses it to bring an
+// order saved by an older version up to date.
+var introducedTasks = []string{"claude"}
 
 func DefaultTaskNames() []string {
 	return append([]string(nil), defaultTaskOrder...)
@@ -41,6 +46,7 @@ func DefaultConfig() Config {
 			"brew":    {Enabled: true},
 			"cask":    {Enabled: true},
 			"amp":     {Enabled: true},
+			"claude":  {Enabled: true},
 			"yazi":    {Enabled: true},
 			"nvim":    {Enabled: true},
 			"mason":   {Enabled: true},
@@ -73,6 +79,8 @@ func LoadConfig(path string) (Config, error) {
 	defer file.Close()
 
 	section := ""
+	sawOrder := false
+	taskSections := map[string]bool{}
 	scanner := bufio.NewScanner(file)
 	lineNo := 0
 	for scanner.Scan() {
@@ -84,6 +92,9 @@ func LoadConfig(path string) (Config, error) {
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = strings.TrimSpace(line[1 : len(line)-1])
+			if name, ok := strings.CutPrefix(section, "tasks."); ok {
+				taskSections[name] = true
+			}
 			continue
 		}
 
@@ -108,6 +119,7 @@ func LoadConfig(path string) (Config, error) {
 				return cfg, fmt.Errorf("%s:%d: %w", path, lineNo, err)
 			}
 			cfg.TaskOrder = order
+			sawOrder = true
 		case strings.HasPrefix(section, "tasks."):
 			name := strings.TrimPrefix(section, "tasks.")
 			task := cfg.Tasks[name]
@@ -126,8 +138,56 @@ func LoadConfig(path string) (Config, error) {
 	if err := scanner.Err(); err != nil {
 		return cfg, err
 	}
+	if sawOrder {
+		cfg.TaskOrder = withIntroducedTasks(cfg.TaskOrder, taskSections)
+	}
 	cfg.Clean.Whitelist = effectiveCleanWhitelist(cfg.Clean.Whitelist)
 	return cfg, nil
+}
+
+// withIntroducedTasks adds default tasks that are newer than a saved order.
+// Bloom's own config writers save every default task in order, so an order
+// that names every task older than an introduced one was written before that
+// task existed, and the task joins it at its default position. An order that
+// leaves an older task out was curated by hand and stays as written, and a
+// [tasks.<name>] section means the config already knows the task.
+func withIntroducedTasks(order []string, taskSections map[string]bool) []string {
+	for i, name := range introducedTasks {
+		if containsString(order, name) || taskSections[name] {
+			continue
+		}
+		older := true
+		for _, task := range defaultTaskOrder {
+			if task != name && !containsString(introducedTasks[i:], task) && !containsString(order, task) {
+				older = false
+				break
+			}
+		}
+		if older {
+			order = insertDefaultTask(order, name)
+		}
+	}
+	return order
+}
+
+// insertDefaultTask places name right after the nearest task that precedes it
+// in the default order, so a reordered config keeps its own arrangement.
+func insertDefaultTask(order []string, name string) []string {
+	at := 0
+	for _, task := range defaultTaskOrder {
+		if task == name {
+			break
+		}
+		for i, existing := range order {
+			if existing == task {
+				at = i + 1
+			}
+		}
+	}
+	out := make([]string, 0, len(order)+1)
+	out = append(out, order[:at]...)
+	out = append(out, name)
+	return append(out, order[at:]...)
 }
 
 // confirmConfigMissing separates a config that does not exist from one that
@@ -241,16 +301,29 @@ func ConfigText(cfg Config) string {
 
 	for _, name := range cfg.TaskOrder {
 		task := cfg.Tasks[name]
-		fmt.Fprintln(&b)
-		fmt.Fprintf(&b, "[tasks.%s]\n", name)
-		fmt.Fprintf(&b, "enabled = %s\n", formatBool(task.Enabled))
-		if taskSupportsPackages(name) {
-			fmt.Fprintf(&b, "include = %s\n", formatStringArray(task.Include))
-			fmt.Fprintf(&b, "exclude = %s\n", formatStringArray(task.Exclude))
+		writeTaskSection(&b, name, task.Enabled, task)
+	}
+	// withIntroducedTasks reads a section as proof that the config already
+	// knows a newer task. An introduced task left out of the order therefore
+	// keeps one, recording that it does not run, so a later save cannot erase
+	// that marker and let the next load add the task back.
+	for _, name := range introducedTasks {
+		if !containsString(cfg.TaskOrder, name) {
+			writeTaskSection(&b, name, false, cfg.Tasks[name])
 		}
 	}
 
 	return b.String()
+}
+
+func writeTaskSection(b *strings.Builder, name string, enabled bool, task TaskConfig) {
+	fmt.Fprintln(b)
+	fmt.Fprintf(b, "[tasks.%s]\n", name)
+	fmt.Fprintf(b, "enabled = %s\n", formatBool(enabled))
+	if taskSupportsPackages(name) {
+		fmt.Fprintf(b, "include = %s\n", formatStringArray(task.Include))
+		fmt.Fprintf(b, "exclude = %s\n", formatStringArray(task.Exclude))
+	}
 }
 
 func SetEnabledTasks(cfg *Config, enabled []string) error {

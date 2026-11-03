@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -588,5 +589,180 @@ func TestRunNPMUsesOfficialGlobalUpdateCommand(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+}
+
+type claudeRunner struct {
+	*sequenceRunner
+	path string
+}
+
+func (r *claudeRunner) LookPath(file string) (string, error) {
+	if file == "claude" && r.path != "" {
+		return r.path, nil
+	}
+	return "", errNotFound
+}
+
+func newClaudeRunner(path string) *claudeRunner {
+	return &claudeRunner{
+		path: path,
+		sequenceRunner: &sequenceRunner{outputs: map[string][]CommandOutput{
+			"claude --version": {{Stdout: "2.1.0 (Claude Code)\n"}, {Stdout: "2.1.1 (Claude Code)\n"}},
+			"claude update":    {{Stdout: "Successfully updated from 2.1.0 to version 2.1.1\n"}},
+		}},
+	}
+}
+
+func linkTestExecutable(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nativeClaudeHome lays out Claude Code's native installer: a launcher in
+// ~/.local/bin linked to a version file in ~/.local/share/claude/versions.
+func nativeClaudeHome(t *testing.T) (home, launcher string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	version := filepath.Join(home, ".local", "share", "claude", "versions", "2.1.0")
+	writeTestExecutable(t, version)
+	launcher = filepath.Join(home, ".local", "bin", "claude")
+	linkTestExecutable(t, version, launcher)
+	return home, launcher
+}
+
+func TestRunClaudeUpdatesNativeInstall(t *testing.T) {
+	_, launcher := nativeClaudeHome(t)
+	r := newClaudeRunner(launcher)
+
+	res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{"claude --version", "claude update", "claude --version"}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+	if res.Status != StatusOK || res.Message != "changed" || !reflect.DeepEqual(res.Summary, []string{"claude"}) {
+		t.Fatalf("result = %#v, want a changed claude summary", res)
+	}
+}
+
+func TestRunClaudeReportsNoChangeWhenAlreadyCurrent(t *testing.T) {
+	_, launcher := nativeClaudeHome(t)
+	r := newClaudeRunner(launcher)
+	r.outputs["claude --version"] = []CommandOutput{{Stdout: "2.1.0 (Claude Code)\n"}, {Stdout: "2.1.0 (Claude Code)\n"}}
+	r.outputs["claude update"] = []CommandOutput{{Stdout: "Claude Code is up to date (2.1.0)\n"}}
+
+	res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil || res.Status != StatusOK || len(res.Summary) != 0 {
+		t.Fatalf("result = %#v, want ok without a summary", res)
+	}
+}
+
+func TestRunClaudeReportsUpdateFailure(t *testing.T) {
+	_, launcher := nativeClaudeHome(t)
+	r := newClaudeRunner(launcher)
+	r.outputs["claude update"] = []CommandOutput{{Err: errors.New("exit status 1"), Stderr: "Failed to check for updates\n"}}
+
+	res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err == nil || !strings.Contains(res.Output, "Failed to check for updates") {
+		t.Fatalf("result = %#v, want the updater's failure", res)
+	}
+}
+
+func TestRunClaudeDryRunDoesNotUpdate(t *testing.T) {
+	_, launcher := nativeClaudeHome(t)
+	r := newClaudeRunner(launcher)
+
+	res := runClaude(context.Background(), r, UpdateOptions{DryRun: true, Config: DefaultConfig()})
+	if res.Status != StatusDryRun || res.Message != "claude update" {
+		t.Fatalf("result = %#v, want a dry-run claude update", res)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("dry run ran %#v", r.calls)
+	}
+}
+
+func TestRunClaudeHonorsXDGDataHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dataHome := filepath.Join(t.TempDir(), "data")
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	version := filepath.Join(dataHome, "claude", "versions", "2.1.0")
+	writeTestExecutable(t, version)
+	launcher := filepath.Join(home, ".local", "bin", "claude")
+	linkTestExecutable(t, version, launcher)
+	r := newClaudeRunner(launcher)
+
+	if res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()}); res.Err != nil || res.Status != StatusOK || len(r.calls) != 3 {
+		t.Fatalf("result = %#v, calls = %#v; want the native update under XDG_DATA_HOME", res, r.calls)
+	}
+}
+
+func TestRunClaudeUpdatesLegacyLocalInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	launcher := filepath.Join(home, ".claude", "local", "claude")
+	writeTestExecutable(t, launcher)
+	r := newClaudeRunner(launcher)
+
+	if res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()}); res.Err != nil || res.Status != StatusOK || len(r.calls) != 3 {
+		t.Fatalf("result = %#v, calls = %#v; want the legacy local install updated", res, r.calls)
+	}
+}
+
+func TestRunClaudeLeavesPackageManagerInstallsToTheirTasks(t *testing.T) {
+	cases := []struct {
+		name   string
+		target string
+		reason string
+	}{
+		{name: "homebrew cask", target: "opt/homebrew/Caskroom/claude-code/2.1.0/claude", reason: "managed by Homebrew"},
+		{name: "npm global", target: "opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js", reason: "managed by npm"},
+		{name: "launcher wrapper", target: "", reason: "not a native install"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			home, _ := nativeClaudeHome(t)
+			root := t.TempDir()
+			launcher := filepath.Join(root, "bin", "claude")
+			if tt.target == "" {
+				// A hand-written wrapper next to the native launcher is not
+				// the installer's own layout, even with versions present.
+				launcher = filepath.Join(home, ".local", "bin", "claude-wrapper")
+				writeTestExecutable(t, launcher)
+			} else {
+				target := filepath.Join(root, tt.target)
+				writeTestExecutable(t, target)
+				linkTestExecutable(t, target, launcher)
+			}
+			r := newClaudeRunner(launcher)
+
+			for _, dryRun := range []bool{false, true} {
+				res := runClaude(context.Background(), r, UpdateOptions{DryRun: dryRun, Config: DefaultConfig()})
+				if res.Status != StatusSkipped || res.Message != tt.reason {
+					t.Fatalf("dryRun=%v result = %#v, want skipped %q", dryRun, res, tt.reason)
+				}
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("calls = %#v, want none for a package-manager install", r.calls)
+			}
+		})
+	}
+}
+
+func TestRunClaudeSkipsWhenMissing(t *testing.T) {
+	r := newClaudeRunner("")
+	if res := runClaude(context.Background(), r, UpdateOptions{Config: DefaultConfig()}); res.Status != StatusSkipped || len(r.calls) != 0 {
+		t.Fatalf("result = %#v, calls = %#v; want a silent skip", res, r.calls)
 	}
 }
