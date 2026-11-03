@@ -543,6 +543,26 @@ func TestCleanProcessGuardsCoverActiveDeveloperTools(t *testing.T) {
 			command: "/usr/bin/xcodebuild -scheme Project",
 			family:  "Xcode",
 		},
+		{
+			path:    filepath.Join(home, ".cache", "uv", "archive-v0", "abc123"),
+			command: "/opt/homebrew/bin/uvx mcp-server-fetch",
+			family:  "uv",
+		},
+		{
+			path:    filepath.Join(home, ".cache", "uv", "environments-v2", "tool"),
+			command: filepath.Join(home, ".cache", "uv", "archive-v0", "abc123", "bin", "python") + " -m mcp_server_fetch",
+			family:  "uv",
+		},
+		{
+			path:    filepath.Join(home, "Library", "Caches", "uv", "archive-v0", "abc123"),
+			command: "/opt/homebrew/bin/uv sync",
+			family:  "uv",
+		},
+		{
+			path:    filepath.Join(home, ".bun", "install", "cache", "react@19.0.0"),
+			command: filepath.Join(home, ".bun", "bin", "bunx") + " vite",
+			family:  "Bun",
+		},
 	}
 
 	for _, test := range tests {
@@ -1626,4 +1646,42 @@ func cleanResultFailedFor(res CleanResult, path, reason string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunCleanHoldsUvAndBunCachesWhileTheyRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	uvCache := filepath.Join(home, ".cache", "uv", "archive-v0")
+	bunCache := filepath.Join(home, ".bun", "install", "cache", "react@19.0.0")
+	for _, dir := range []string{uvCache, bunCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "blob"), []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	run := func(table string) CleanResult {
+		return RunClean(context.Background(), CleanOptions{
+			DryRun: true,
+			Config: cfg,
+			Runner: &cleanProbeRunner{processTables: []string{table}},
+		})
+	}
+
+	idle := run("/sbin/launchd\n")
+	for _, dir := range []string{uvCache, bunCache} {
+		if !cleanResultContains(idle, dir) {
+			t.Fatalf("idle cache %q missing from targets: %#v", dir, idle.Targets)
+		}
+	}
+	busy := run("/sbin/launchd\n/opt/homebrew/bin/uvx mcp-server-fetch\n" + filepath.Join(home, ".bun", "bin", "bun") + " install\n")
+	if cleanResultContains(busy, uvCache) || !cleanResultSkippedFor(busy, uvCache, "uv is running") {
+		t.Fatalf("uv cache was not held while uvx runs: targets=%#v skipped=%#v", busy.Targets, busy.Skipped)
+	}
+	if cleanResultContains(busy, bunCache) || !cleanResultSkippedFor(busy, bunCache, "Bun is running") {
+		t.Fatalf("Bun cache was not held while bun runs: targets=%#v skipped=%#v", busy.Targets, busy.Skipped)
+	}
 }

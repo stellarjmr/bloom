@@ -799,6 +799,25 @@ func cleanProcessGuardForPath(path string) (string, []string) {
 			},
 			programs: []string{"xcode", "xcodebuild", "sourcekitservice"},
 		},
+		// uvx runs tools, MCP servers among them, from environments inside
+		// uv's cache, and a running uv or bun install writes into its cache.
+		// The token also matches a child whose command line runs from the
+		// cache, such as .cache/uv/archive-v0/<id>/bin/python. A uv cache
+		// under ~/Library/Caches is listed too: the User app cache rule sweeps
+		// it, and the named-owner check ignores a two-letter folder name.
+		{
+			family: "uv",
+			roots: []string{
+				filepath.Join(home, ".cache", "uv"),
+				filepath.Join(home, "Library", "Caches", "uv"),
+			},
+			programs: []string{"uv", "uvx"},
+		},
+		{
+			family:   "Bun",
+			roots:    []string{filepath.Join(home, ".bun", "install", "cache")},
+			programs: []string{"bun", "bunx"},
+		},
 	}
 	for _, guard := range guards {
 		for _, root := range guard.roots {
