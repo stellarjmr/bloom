@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -25,8 +26,22 @@ const (
 var uninstallSiblingAppDirs = defaultAppDirs
 
 type uninstallSiblingScan struct {
+	// Paths are other installed copies with the same bundle ID.
 	Paths    []string
 	Complete bool
+	// Family lists other installed builds of the same app: a name that differs
+	// from the selected one only by a release channel ("Firefox" and "Firefox
+	// Nightly"), or a bundle ID that extends the selected one at a dot or is
+	// extended by it (com.google.Chrome and com.google.Chrome.canary).
+	Family []string
+	// NameFamily reports that a Family build shares the selected app's base
+	// name, and with it the folders named after that base.
+	NameFamily bool
+	// ExtendedIDs are Family bundle IDs that strictly extend the selected ID.
+	// A leftover named with one belongs to that build.
+	ExtendedIDs []string
+	// FamilyExecutables are the bundle executable names of Family builds.
+	FamilyExecutables []string
 }
 
 func applyUninstallSiblingScan(result *UninstallResult, scan uninstallSiblingScan) {
@@ -40,6 +55,122 @@ func applyUninstallSiblingScan(result *UninstallResult, scan uninstallSiblingSca
 		result.SharedBundleUncertain = true
 	}
 	result.SiblingPaths = uniqueSortedStrings(append(result.SiblingPaths, scan.Paths...))
+	result.FamilyBuilds = uniqueSortedStrings(append(result.FamilyBuilds, scan.Family...))
+}
+
+// familyScanAddsBuilds reports whether live found a family build, or a
+// relation to one, that the plan built from planned did not account for.
+func familyScanAddsBuilds(planned, live uninstallSiblingScan) bool {
+	if live.NameFamily && !planned.NameFamily {
+		return true
+	}
+	for _, path := range live.Family {
+		if !containsString(planned.Family, path) {
+			return true
+		}
+	}
+	for _, id := range live.ExtendedIDs {
+		if !containsString(planned.ExtendedIDs, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func familyZapRefusal(builds []string) error {
+	return errors.New("refusing Homebrew --zap because another installed build of this app may share its data: " +
+		strings.Join(builds, ", "))
+}
+
+// appChannelWords name the release channels that tell builds of one app
+// apart. "Edge" is left out: "Microsoft Edge" would lose its own product name.
+var appChannelWords = []string{
+	"Developer Edition", "Technology Preview",
+	"Nightly", "Beta", "Alpha", "Dev", "Canary", "Preview", "Insiders", "Insider",
+	"Stable", "Release", "RC", "LTS",
+}
+
+// appFamilyBaseName strips one trailing release-channel word, separated by a
+// space or " - ", so every build of an app shares one base name: "Firefox
+// Nightly" and "Firefox" are both "Firefox", and "Visual Studio Code -
+// Insiders" is "Visual Studio Code". A name without a channel word, or one
+// whose base would be shorter than a leftover name token, is its own base.
+func appFamilyBaseName(name string) string {
+	name = strings.TrimSpace(name)
+	for _, word := range appChannelWords {
+		if len(name) <= len(word) || !strings.EqualFold(name[len(name)-len(word):], word) {
+			continue
+		}
+		prefix := name[:len(name)-len(word)]
+		if !strings.HasSuffix(prefix, " ") {
+			continue
+		}
+		base := strings.TrimSpace(prefix)
+		base = strings.TrimSpace(strings.TrimSuffix(base, " -"))
+		if utf8.RuneCountInString(base) >= 3 {
+			return base
+		}
+	}
+	return name
+}
+
+// familyNameVariants returns the literal leftover names, lowercased, that
+// every build sharing name's base uses: the base and its no-space, hyphen,
+// and underscore spellings.
+func familyNameVariants(name string) []string {
+	base := appFamilyBaseName(name)
+	if utf8.RuneCountInString(base) < 3 {
+		return nil
+	}
+	lower := strings.ToLower(base)
+	return uniqueStrings([]string{
+		lower,
+		strings.ReplaceAll(lower, " ", ""),
+		strings.ReplaceAll(lower, " ", "-"),
+		strings.ReplaceAll(lower, " ", "_"),
+	})
+}
+
+type bundleIDRelation int
+
+const (
+	bundleIDUnrelated bundleIDRelation = iota
+	bundleIDExtendedBySelected
+	bundleIDExtendsSelected
+	bundleIDSame
+)
+
+// relateBundleIDs compares a candidate's bundle ID with the selected one on
+// whole dot-delimited components, ASCII case-insensitively. Whichever ID is
+// the shorter must keep three components, so a vendor prefix such as
+// com.google never makes the vendor's other apps builds of one another.
+func relateBundleIDs(candidate, selected string) bundleIDRelation {
+	if !looksLikeBundleID(candidate) || !looksLikeBundleID(selected) {
+		return bundleIDUnrelated
+	}
+	if bundleIDEqual(candidate, selected) {
+		return bundleIDSame
+	}
+	c, s := asciiLower(candidate), asciiLower(selected)
+	if strings.HasPrefix(c, s+".") && strings.Count(s, ".") >= 2 {
+		return bundleIDExtendsSelected
+	}
+	if strings.HasPrefix(s, c+".") && strings.Count(c, ".") >= 2 {
+		return bundleIDExtendedBySelected
+	}
+	return bundleIDUnrelated
+}
+
+// bundleIDFamilyNeedles are the identifiers whose bytes a related binary
+// plist must contain: the selected ID, which every ID extending it contains,
+// and each parent ID of at least three components it could extend.
+func bundleIDFamilyNeedles(bundleID string) []string {
+	needles := []string{bundleID}
+	parts := strings.Split(bundleID, ".")
+	for n := len(parts) - 1; n >= 3; n-- {
+		needles = append(needles, strings.Join(parts[:n], "."))
+	}
+	return needles
 }
 
 func sharedBundleZapRefusal(app AppEntry, result UninstallResult) error {
@@ -114,12 +245,29 @@ func uniqueSortedStrings(values []string) []string {
 func scanUninstallBundleSiblings(ctx context.Context, app AppEntry) uninstallSiblingScan {
 	result := uninstallSiblingScan{Complete: true}
 	bundleID := strings.TrimSpace(app.BundleID)
-	if !looksLikeBundleID(bundleID) {
+	validID := looksLikeBundleID(bundleID)
+	selectedBase := ""
+	if leftoverNameToken(app) != "" {
+		selectedBase = appFamilyBaseName(app.Name)
+	}
+	if !validID && selectedBase == "" {
 		return result
 	}
 	if err := ctx.Err(); err != nil {
 		result.Complete = false
 		return result
+	}
+	needles := []string(nil)
+	if validID {
+		needles = bundleIDFamilyNeedles(bundleID)
+	}
+	addFamily := func(candidate string) {
+		if !containsString(result.Family, candidate) {
+			result.Family = append(result.Family, candidate)
+			if executable := readBundleExecutable(candidate); executable != "" {
+				result.FamilyExecutables = append(result.FamilyExecutables, executable)
+			}
+		}
 	}
 
 	scanCtx, cancel := context.WithTimeout(ctx, uninstallSiblingScanTimeout)
@@ -151,14 +299,39 @@ func scanUninstallBundleSiblings(ctx context.Context, app AppEntry) uninstallSib
 		if sameAppBundle(candidate, app.Path, selectedIdentity, selectedResolved) {
 			return
 		}
-		matches, known := candidateBundleIDMatches(scanCtx, candidate, bundleID)
-		if !known {
-			result.Complete = false
+		relation := bundleIDUnrelated
+		candidateID := ""
+		if validID {
+			ids, known := candidateRelatedBundleIDs(scanCtx, candidate, needles)
+			if !known {
+				result.Complete = false
+				return
+			}
+			for _, id := range ids {
+				if rel := relateBundleIDs(id, bundleID); rel > relation {
+					relation, candidateID = rel, id
+				}
+			}
+		}
+		if relation == bundleIDSame {
+			if !seenMatches[candidate] {
+				seenMatches[candidate] = true
+				result.Paths = append(result.Paths, candidate)
+			}
 			return
 		}
-		if matches && !seenMatches[candidate] {
-			seenMatches[candidate] = true
-			result.Paths = append(result.Paths, candidate)
+		if relation == bundleIDExtendsSelected {
+			addFamily(candidate)
+			if !containsString(result.ExtendedIDs, candidateID) {
+				result.ExtendedIDs = append(result.ExtendedIDs, candidateID)
+			}
+		}
+		if relation == bundleIDExtendedBySelected {
+			addFamily(candidate)
+		}
+		if selectedBase != "" && strings.EqualFold(appFamilyBaseName(appBundleBaseName(candidate)), selectedBase) {
+			addFamily(candidate)
+			result.NameFamily = true
 		}
 	}
 
@@ -210,6 +383,8 @@ func scanUninstallBundleSiblings(ctx context.Context, app AppEntry) uninstallSib
 		result.Complete = false
 	}
 	sort.Strings(result.Paths)
+	sort.Strings(result.Family)
+	sort.Strings(result.ExtendedIDs)
 	return result
 }
 
@@ -272,25 +447,33 @@ func resolvedAppBundlePath(path string) string {
 	return filepath.Clean(resolved)
 }
 
-// candidateBundleIDMatches avoids spawning plutil for every installed app.
-// XML plists are parsed directly. Binary plists are passed to plutil only when
-// their bytes can contain the requested ASCII identifier.
-func candidateBundleIDMatches(ctx context.Context, appPath, want string) (match, known bool) {
+// candidateRelatedBundleIDs returns the bundle IDs of appPath's Info.plists
+// that could relate to the selected app, avoiding plutil for every installed
+// app: XML plists are parsed directly, and a binary plist goes to plutil only
+// when its bytes contain one of needles (needles[0] is the selected ID).
+// known is false while any plist could not be judged, unless one already
+// names the selected ID: that makes the candidate a same-ID copy, the most
+// conservative answer, whatever the unread plist says. Any other ID leaves
+// the candidate undecided, because the unread plist might name it.
+func candidateRelatedBundleIDs(ctx context.Context, appPath string, needles []string) (ids []string, known bool) {
 	plists, complete := bundleInfoPlistCandidates(appPath)
 	if len(plists) == 0 {
-		return false, complete
+		return nil, complete
 	}
-	unknown := !complete
+	known = complete
 	for _, plist := range plists {
-		matches, plistKnown := plistBundleIDMatches(ctx, plist, want)
-		if matches {
-			return true, true
+		id, plistKnown := plistRelatedBundleID(ctx, plist, needles)
+		if id != "" {
+			ids = append(ids, id)
+			if len(needles) > 0 && bundleIDEqual(id, needles[0]) {
+				return ids, true
+			}
 		}
 		if !plistKnown {
-			unknown = true
+			known = false
 		}
 	}
-	return false, !unknown
+	return ids, known
 }
 
 func bundleInfoPlistCandidates(appPath string) ([]string, bool) {
@@ -340,46 +523,55 @@ func bundleInfoPlistCandidates(appPath string) ([]string, bool) {
 	return paths, complete
 }
 
-func plistBundleIDMatches(ctx context.Context, plist, want string) (match, known bool) {
+// plistRelatedBundleID returns the plist's CFBundleIdentifier, or "" when it
+// has none or, for a binary plist, when its bytes name none of needles.
+// known is false when the plist could not be judged.
+func plistRelatedBundleID(ctx context.Context, plist string, needles []string) (id string, known bool) {
 	info, err := os.Stat(plist)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, false
+		return "", false
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > uninstallSiblingInfoPlistLimit {
-		return false, false
+		return "", false
 	}
 	data, err := os.ReadFile(plist)
 	if err != nil {
-		return false, false
+		return "", false
 	}
 	trimmed := bytes.TrimSpace(data)
 	if bytes.HasPrefix(trimmed, []byte("<?xml")) || bytes.HasPrefix(trimmed, []byte("<plist")) {
 		if !validXMLPlistData(data) {
-			return false, false
+			return "", false
 		}
 		id := readXMLPlistStringData(data, "CFBundleIdentifier")
-		if id == "" || !looksLikeBundleID(id) {
-			return false, true
+		if !looksLikeBundleID(id) {
+			return "", true
 		}
-		return bundleIDEqual(id, want), true
+		return id, true
 	}
 	if !bytes.HasPrefix(data, []byte("bplist")) {
-		id := readBundleIDFromPlist(ctx, plist)
-		if id != "" {
-			return bundleIDEqual(id, want), true
+		if id := readBundleIDFromPlist(ctx, plist); id != "" {
+			return id, true
 		}
-		return false, plistLintSucceeds(ctx, plist)
+		return "", plistLintSucceeds(ctx, plist)
 	}
 	lowerData := bytes.ToLower(data)
-	if !bytes.Contains(lowerData, []byte(strings.ToLower(want))) &&
-		!bytes.Contains(lowerData, utf16BEASCII(strings.ToLower(want))) {
-		return false, true
+	mentioned := false
+	for _, needle := range needles {
+		needle = strings.ToLower(needle)
+		if bytes.Contains(lowerData, []byte(needle)) || bytes.Contains(lowerData, utf16BEASCII(needle)) {
+			mentioned = true
+			break
+		}
 	}
-	id := readBundleIDFromPlist(ctx, plist)
+	if !mentioned {
+		return "", true
+	}
+	id = readBundleIDFromPlist(ctx, plist)
 	if id == "" {
-		return false, false
+		return "", false
 	}
-	return bundleIDEqual(id, want), true
+	return id, true
 }
 
 func validXMLPlistData(data []byte) bool {

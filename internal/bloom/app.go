@@ -920,6 +920,15 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 		for _, item := range res.KeptData {
 			fmt.Fprintf(a.Out, "   kept %s, %s\n", item.Path, item.Reason)
 		}
+		if len(res.FamilyKept) > 0 {
+			fmt.Fprintln(a.Out, "   kept data that another installed build of this app also uses")
+			for _, path := range res.FamilyBuilds {
+				fmt.Fprintf(a.Out, "   build: %s\n", path)
+			}
+			for _, path := range res.FamilyKept {
+				fmt.Fprintf(a.Out, "   kept: %s\n", path)
+			}
+		}
 		if res.AppReturned {
 			fmt.Fprintf(a.Out, "   kept everything not yet removed because %s reappeared during uninstall\n", res.App.Path)
 		} else if res.AppPathErr != nil {

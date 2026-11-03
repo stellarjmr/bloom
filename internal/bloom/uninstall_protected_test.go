@@ -41,7 +41,8 @@ func TestFindRelatedPathsKeepsTheSteamLibrary(t *testing.T) {
 		t.Run(libraryName, func(t *testing.T) {
 			_, appPath, library, cache := steamTestHome(t, libraryName)
 
-			paths, kept := findRelatedPaths(AppEntry{Path: appPath, Name: "Steam", BundleID: "com.valvesoftware.steam"})
+			related := findRelatedPaths(AppEntry{Path: appPath, Name: "Steam", BundleID: "com.valvesoftware.steam"}, leftoverFamily{})
+			paths, kept := related.paths, related.keptData
 			for _, p := range paths {
 				if _, ok := protectedUninstallData(p); ok || strings.EqualFold(p, library) {
 					t.Fatalf("leftovers include the Steam library: %#v", paths)

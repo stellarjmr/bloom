@@ -703,7 +703,7 @@ func TestStopAppIgnoresOtherAppsSharingTheElectronRuntimeName(t *testing.T) {
 		pids:         map[string][]string{"Electron": {"200"}},
 		processPaths: map[string]string{"200": other},
 	}
-	if stopApp(context.Background(), idle, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}) {
+	if stopApp(context.Background(), idle, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, nil) {
 		t.Fatalf("another Electron app made the idle selection look running: %#v", idle.calls)
 	}
 	if runnerCallContains(idle.calls, "/usr/bin/osascript") || runnerCallContains(idle.calls, "/bin/kill") {
@@ -717,7 +717,7 @@ func TestStopAppIgnoresOtherAppsSharingTheElectronRuntimeName(t *testing.T) {
 			"300": filepath.Join(appPath, "Contents", "MacOS", "Electron"),
 		},
 	}
-	if stopApp(context.Background(), busy, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}) {
+	if stopApp(context.Background(), busy, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, nil) {
 		t.Fatalf("selected Electron app still reported running after TERM: %#v", busy.calls)
 	}
 	if !runnerCallContains(busy.calls, `tell application id "com.example.foo" to quit`) || !runnerCallContains(busy.calls, "/bin/kill -TERM 300") {
@@ -1143,7 +1143,7 @@ func TestStopAppSendsQuitThenTerminatesVerifiedBundleProcess(t *testing.T) {
 		},
 	}
 
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"}, nil)
 
 	if !runnerCallContains(r.calls, "/usr/bin/osascript -e tell application id \"com.microsoft.VSCode\" to quit") {
 		t.Fatalf("osascript quit not called with bundle id: %#v", r.calls)
@@ -1188,7 +1188,7 @@ func TestStopAppDoesNotKillSameNameProcessOutsideBundle(t *testing.T) {
 		},
 	}
 
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Visual Studio Code", BundleID: "com.microsoft.VSCode"}, nil)
 
 	if stillRunning {
 		t.Fatalf("stopApp should not treat an unrelated same-name process as the target app: %#v", r.calls)
@@ -1218,7 +1218,7 @@ func TestStopAppEscalatesToSIGKILLWhenSIGTERMFails(t *testing.T) {
 		ignoreTERM: map[string]bool{"123": true},
 	}
 
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, nil)
 
 	if stillRunning {
 		t.Fatalf("stopApp should report exited after SIGKILL succeeds: %#v", r.calls)
@@ -1252,7 +1252,7 @@ func TestStopAppDoesNotSignalReusedPID(t *testing.T) {
 		},
 	}
 
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, nil)
 
 	if !stillRunning {
 		t.Fatalf("reused PID should leave a conservative still-running result: %#v", r.calls)
@@ -1289,7 +1289,7 @@ func TestStopAppDoesNotEscalateReusedPIDToSIGKILL(t *testing.T) {
 		ignoreTERM: map[string]bool{"123": true},
 	}
 
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: appPath, Name: "Foo", BundleID: "com.example.foo"}, nil)
 
 	if !stillRunning {
 		t.Fatalf("reused PID after TERM should remain unresolved: %#v", r.calls)
@@ -1310,7 +1310,7 @@ func TestStopAppFallsBackToAppNameForQuitWhenBundleIDMissing(t *testing.T) {
 	t.Cleanup(func() { stopAppPollInterval = oldPoll })
 
 	r := &processRunner{running: map[string]bool{"Foo": true}}
-	stillRunning := stopApp(context.Background(), r, AppEntry{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo"})
+	stillRunning := stopApp(context.Background(), r, AppEntry{Path: filepath.Join(home, "Applications", "Foo.app"), Name: "Foo"}, nil)
 	if !runnerCallContains(r.calls, "/usr/bin/osascript -e tell application \"Foo\" to quit") {
 		t.Fatalf("osascript quit did not fall back to app name: %#v", r.calls)
 	}

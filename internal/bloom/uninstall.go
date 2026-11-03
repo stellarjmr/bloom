@@ -63,6 +63,11 @@ type UninstallResult struct {
 	// KeptData lists protected folders the app's leftover rules matched and
 	// uninstall left in place.
 	KeptData []UninstallKeptPath
+	// FamilyBuilds lists other installed builds of the same app, and
+	// FamilyKept the matched leftovers left in place because they are named
+	// for the whole family or carry one of those builds' bundle IDs.
+	FamilyBuilds []string
+	FamilyKept   []string
 	// AppReturned records that something reappeared at the app path after
 	// the bundle moved to Trash; the remaining data was left to that copy.
 	AppReturned bool
@@ -594,20 +599,58 @@ func protectedDataZapRefusal(cask string, kept []UninstallKeptPath) error {
 		cask, strings.Join(parts, ", "), cask)
 }
 
+// leftoverFamily describes the other installed builds of an app that its
+// leftovers may also belong to.
+type leftoverFamily struct {
+	// names are the family's base-name leftover names, lowercased, set only
+	// while a build sharing the base name is installed.
+	names []string
+	// extendedIDs are installed builds' bundle IDs that strictly extend the
+	// selected app's; a leftover named with one belongs to that build.
+	extendedIDs []string
+}
+
+func leftoverFamilyFromScan(app AppEntry, scan uninstallSiblingScan) leftoverFamily {
+	family := leftoverFamily{extendedIDs: scan.ExtendedIDs}
+	if scan.NameFamily {
+		family.names = familyNameVariants(app.Name)
+	}
+	return family
+}
+
+// keeps reports whether path is a leftover another installed build uses.
+func (f leftoverFamily) keeps(path string) bool {
+	base := filepath.Base(path)
+	for _, id := range f.extendedIDs {
+		if nameHasBundleIDBoundary(base, id) {
+			return true
+		}
+	}
+	leaf := strings.ToLower(base)
+	leaf = strings.TrimSuffix(leaf, ".savedstate")
+	leaf = strings.TrimSuffix(leaf, ".plist")
+	return containsString(f.names, leaf)
+}
+
+type relatedPathSet struct {
+	paths      []string
+	keptData   []UninstallKeptPath
+	familyKept []string
+}
+
 // FindRelatedPaths returns every cleanup candidate for the given app.
 // Includes the bundle itself, then standard ~/Library subdirectories that
 // match by bundle id or app basename. Paths are de-duplicated and ordered.
 func FindRelatedPaths(app AppEntry) []string {
-	paths, _ := findRelatedPaths(app)
-	return paths
+	return findRelatedPaths(app, leftoverFamily{}).paths
 }
 
-// findRelatedPaths is FindRelatedPaths that also reports the protected
-// folders the app's leftover rules matched and kept.
-func findRelatedPaths(app AppEntry) ([]string, []UninstallKeptPath) {
+// findRelatedPaths is FindRelatedPaths that leaves out what protected folders
+// and the app's other installed builds keep, and reports both.
+func findRelatedPaths(app AppEntry, family leftoverFamily) relatedPathSet {
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		return []string{app.Path}, nil
+		return relatedPathSet{paths: []string{app.Path}}
 	}
 
 	paths := []string{app.Path}
@@ -628,9 +671,14 @@ func findRelatedPaths(app AppEntry) ([]string, []UninstallKeptPath) {
 			}
 		}
 	}
-	matchBundleLeafExactPaths(home, app, &paths)
-	matchDiagnosticReports(app, &paths)
-	matchCrashReporterPlists(app, &paths)
+	// Builds of one family often share a data folder for an extended name
+	// and an executable name, which crash reports are keyed by, so while
+	// another build with the base name is installed those stay as well.
+	if len(family.names) == 0 {
+		matchBundleLeafExactPaths(home, app, &paths)
+		matchDiagnosticReports(app, &paths)
+		matchCrashReporterPlists(app, &paths)
+	}
 	matchVSCodePaths(app, &paths)
 
 	// Embedded helper bundles (XPC services, app extensions, and login-item
@@ -664,6 +712,7 @@ func findRelatedPaths(app AppEntry) ([]string, []UninstallKeptPath) {
 	keptSeen := map[string]bool{}
 	var out []string
 	var kept []UninstallKeptPath
+	var familyKept []string
 	for _, p := range paths {
 		if p == "" || isHomeConfigPath(p) || isSharedDeveloperRoot(p) || seen[p] {
 			continue
@@ -679,10 +728,14 @@ func findRelatedPaths(app AppEntry) ([]string, []UninstallKeptPath) {
 			}
 			continue
 		}
+		if p != app.Path && family.keeps(p) {
+			familyKept = append(familyKept, p)
+			continue
+		}
 		out = append(out, p)
 	}
 
-	return out, kept
+	return relatedPathSet{paths: out, keptData: kept, familyKept: familyKept}
 }
 
 // leftoverNameToken returns the app bundle name used for literal leftover
@@ -1135,11 +1188,18 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	siblingScan := scanUninstallBundleSiblings(ctx, app)
 	applyUninstallSiblingScan(&res, siblingScan)
 	sharedBundleData := res.SharedBundleSibling || res.SharedBundleUncertain
+	family := leftoverFamilyFromScan(app, siblingScan)
 
 	cask := detectHomebrewCask(ctx, runner, app)
 	res.BrewCask = cask
 	if cask != "" && sharedBundleData {
 		res.Err = sharedBundleZapRefusal(app, res)
+		return res
+	}
+	// A channel build's cask zaps the stable build's folders and preferences
+	// and the other way round, so --zap must not run while one is installed.
+	if cask != "" && len(res.FamilyBuilds) > 0 {
+		res.Err = familyZapRefusal(res.FamilyBuilds)
 		return res
 	}
 
@@ -1154,7 +1214,8 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			paths = append(paths, app.Path)
 		}
 	} else {
-		paths, res.KeptData = findRelatedPaths(app)
+		related := findRelatedPaths(app, family)
+		paths, res.KeptData, res.FamilyKept = related.paths, related.keptData, related.familyKept
 		loginItemHelpers = discoverLoginItemHelperBundleIDs(app.Path)
 		// The cask's zap reaches the same folders by name, so a protected
 		// folder that Bloom's own rules matched must not meet --zap either.
@@ -1200,7 +1261,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			return res
 		}
 		liveSiblingScan := scanUninstallBundleSiblings(ctx, app)
-		if !sharedBundleData && (len(liveSiblingScan.Paths) > 0 || !liveSiblingScan.Complete) {
+		if !sharedBundleData && (len(liveSiblingScan.Paths) > 0 || !liveSiblingScan.Complete || familyScanAddsBuilds(siblingScan, liveSiblingScan)) {
 			applyUninstallSiblingScan(&res, liveSiblingScan)
 			res.Err = errors.New("installed app copies changed during uninstall; retry to review the safer plan")
 			return res
@@ -1216,8 +1277,12 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			res.Err = sharedBundleZapRefusal(app, res)
 			return res
 		}
+		if cask != "" && len(res.FamilyBuilds) > 0 {
+			res.Err = familyZapRefusal(res.FamilyBuilds)
+			return res
+		}
 		if cask != "" {
-			if _, liveKept := findRelatedPaths(app); len(liveKept) > 0 {
+			if liveKept := findRelatedPaths(app, family).keptData; len(liveKept) > 0 {
 				res.KeptData = liveKept
 				res.Err = protectedDataZapRefusal(cask, liveKept)
 				return res
@@ -1225,7 +1290,7 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		}
 
 		if !sharedBundleData {
-			res.StillRunning = stopApp(ctx, runner, app)
+			res.StillRunning = stopApp(ctx, runner, app, siblingScan.FamilyExecutables)
 		}
 		if cask != "" {
 			// Homebrew's own record decides, not its exit status. A cask it no
@@ -1345,7 +1410,9 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	// step can wait seconds on another process, so each one asks again.
 	if !dryRun && res.AppRemoved {
 		if !sharedBundleData {
-			if appPathClear() {
+			// Login items are matched by name, which a same-named build
+			// installed elsewhere would answer to as well.
+			if appPathClear() && !familyBuildNamed(res.FamilyBuilds, app.Name) {
 				removeLoginItem(ctx, runner, app)
 			}
 			bootoutLoginItemHelpers(ctx, runner, loginItemHelpers, appPathClear)
@@ -1723,24 +1790,33 @@ const stopAppProcessProbeTimeout = 2 * time.Second
 
 var stopAppPollInterval = 100 * time.Millisecond
 
-func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
+// stopApp quits the app. familyExecutables are the executable names of the
+// app's other installed builds: one that shares the app's executable name
+// would also answer to it, so only processes inside the selected bundle count.
+func stopApp(ctx context.Context, runner Runner, app AppEntry, familyExecutables []string) bool {
 	matchName := readBundleExecutable(app.Path)
 	if matchName == "" {
 		matchName = app.Name
 	}
+	bundleOnly := false
+	for _, executable := range familyExecutables {
+		if strings.EqualFold(executable, matchName) {
+			bundleOnly = true
+		}
+	}
 
-	running := appProcessRunning(ctx, runner, app, matchName)
+	running := appProcessRunning(ctx, runner, app, matchName, bundleOnly)
 	if running {
 		if script := quitAppScript(app); script != "" {
 			_ = runTeardownStep(ctx, runner, stopAppQuitTimeout, "/usr/bin/osascript", "-e", script)
 		}
-		running = !waitForAppProcessExit(ctx, runner, app, matchName, stopAppQuitPolls)
+		running = !waitForAppProcessExit(ctx, runner, app, matchName, bundleOnly, stopAppQuitPolls)
 	}
 
 	unloadMatchingLaunchAgents(ctx, runner, app)
 
 	if running {
-		running = !forceQuitAppProcesses(ctx, runner, app, matchName)
+		running = !forceQuitAppProcesses(ctx, runner, app, matchName, bundleOnly)
 	}
 	return running
 }
@@ -1750,18 +1826,28 @@ func stopApp(ctx context.Context, runner Runner, app AppEntry) bool {
 // translocated copy. A shared runtime name such as Electron belongs to every
 // unrenamed Electron app, so only processes whose executable lies inside the
 // selected bundle count.
-func appProcessRunning(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
-	if isSharedRuntimeExecutable(matchName) {
+func appProcessRunning(ctx context.Context, runner Runner, app AppEntry, matchName string, bundleOnly bool) bool {
+	if bundleOnly || isSharedRuntimeExecutable(matchName) {
 		return len(matchingAppProcessIDs(ctx, runner, app, matchName)) > 0
 	}
 	return processRunning(ctx, runner, matchName)
 }
 
-func waitForAppProcessExit(ctx context.Context, runner Runner, app AppEntry, matchName string, polls int) bool {
-	if isSharedRuntimeExecutable(matchName) {
+func waitForAppProcessExit(ctx context.Context, runner Runner, app AppEntry, matchName string, bundleOnly bool, polls int) bool {
+	if bundleOnly || isSharedRuntimeExecutable(matchName) {
 		return waitForMatchedAppProcessesExit(ctx, runner, app, matchName, polls)
 	}
 	return waitForProcessExit(ctx, runner, matchName, polls)
+}
+
+// familyBuildNamed reports whether one of builds has the app's own name.
+func familyBuildNamed(builds []string, name string) bool {
+	for _, build := range builds {
+		if strings.EqualFold(appBundleBaseName(build), strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
 }
 
 // unloadMatchingLaunchAgents unloads only agents the app owns, so a sibling
@@ -1793,10 +1879,10 @@ func unloadMatchingLaunchAgents(ctx context.Context, runner Runner, app AppEntry
 	}
 }
 
-func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, matchName string) bool {
+func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, matchName string, bundleOnly bool) bool {
 	processes := matchingAppProcessRecords(ctx, runner, app, matchName)
 	if len(processes) == 0 {
-		return !appProcessRunning(ctx, runner, app, matchName)
+		return !appProcessRunning(ctx, runner, app, matchName, bundleOnly)
 	}
 	terminated := make([]matchedAppProcess, 0, len(processes))
 	for _, process := range processes {
@@ -1805,7 +1891,7 @@ func forceQuitAppProcesses(ctx context.Context, runner Runner, app AppEntry, mat
 		}
 	}
 	if len(terminated) == 0 {
-		return !appProcessRunning(ctx, runner, app, matchName)
+		return !appProcessRunning(ctx, runner, app, matchName, bundleOnly)
 	}
 	if waitForMatchedAppProcessesExit(ctx, runner, app, matchName, stopAppForcePolls) {
 		return true
