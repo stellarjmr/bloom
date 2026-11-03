@@ -1228,10 +1228,18 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			res.StillRunning = stopApp(ctx, runner, app)
 		}
 		if cask != "" {
+			// Homebrew's own record decides, not its exit status. A cask it no
+			// longer lists is gone. One it still lists, or a list that cannot
+			// be read, means brew could not run or stopped part way; moving
+			// the bundle anyway would leave a receipt that a later
+			// brew upgrade --cask can reinstall the app from.
 			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", "--zap", cask)
-			if out.Err == nil && !brewCaskStillInstalled(ctx, runner, cask) {
-				res.BrewRemoved = true
+			listed, listErr := brewCaskListed(ctx, runner, cask)
+			if listErr != nil || listed {
+				res.Err = brewCaskUninstallError(cask, out, listErr)
+				return res
 			}
+			res.BrewRemoved = true
 		}
 	}
 
@@ -2178,22 +2186,57 @@ func caskTokenByBrewQuery(ctx context.Context, runner Runner, app AppEntry) stri
 	return ""
 }
 
-// brewCaskStillInstalled returns true when `brew list --cask` still lists
-// the token (i.e. the uninstall did not take effect).
-func brewCaskStillInstalled(ctx context.Context, runner Runner, token string) bool {
-	if token == "" {
-		return false
-	}
+// brewCaskListed reports whether `brew list --cask` lists token. An error
+// means Homebrew could not answer, which never counts as "not listed".
+func brewCaskListed(ctx context.Context, runner Runner, token string) (bool, error) {
 	out := runner.Run(ctx, "brew", "list", "--cask")
 	if out.Err != nil {
-		return false
+		return false, errors.New(brewErrorLine(out))
 	}
 	for _, line := range strings.Split(out.Stdout, "\n") {
 		if strings.TrimSpace(line) == token {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func brewCaskUninstallError(cask string, out CommandOutput, listErr error) error {
+	switch {
+	case out.Err != nil:
+		return fmt.Errorf("brew uninstall --cask %s failed, so Bloom moved nothing: %s", cask, brewErrorLine(out))
+	case listErr != nil:
+		return fmt.Errorf("could not confirm that Homebrew removed cask %s, so Bloom moved nothing: %v", cask, listErr)
+	default:
+		return fmt.Errorf("Homebrew still lists cask %s after brew uninstall, so Bloom moved nothing", cask)
+	}
+}
+
+// brewErrorLine returns Homebrew's own explanation: its first "Error:" line
+// without the prefix, else its first line of output, else the exit status.
+func brewErrorLine(out CommandOutput) string {
+	first := ""
+	for _, text := range []string{out.Stderr, out.Stdout} {
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if rest, ok := strings.CutPrefix(line, "Error:"); ok && strings.TrimSpace(rest) != "" {
+				return strings.TrimSpace(rest)
+			}
+			if first == "" {
+				first = line
+			}
+		}
+	}
+	if first != "" {
+		return first
+	}
+	if out.Err != nil {
+		return out.Err.Error()
+	}
+	return "no output"
 }
 
 func isValidCaskToken(token string) bool {

@@ -18,6 +18,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - Never clean llama.cpp's downloaded models: `bm clean` swept `~/Library/Caches/llama.cpp`, where `llama-cli -hf` and `llama-server -hf` keep multi-GB GGUF weights, as an ordinary app cache. The folder, and a relocated `LLAMA_CACHE`, now count as model stores.
 - Keep the Steam library when `bm uninstall` removes Steam: the name match took `~/Library/Application Support/Steam`, which holds installed games (`steamapps`) and saves (`userdata`). The folder now stays and the summary names it. The `steam` cask's zap removes the same folder, so Bloom refuses that cask and points to `brew uninstall --cask steam` without `--zap`.
+- Stop reporting a failed Homebrew cask uninstall as a success. When `brew uninstall --cask` could not run, for example before the Xcode license is accepted, Bloom printed `ran:`, moved the app itself, and left Homebrew's receipt behind, so a later `brew upgrade` could reinstall the app. Bloom now checks that Homebrew no longer lists the cask, and otherwise stops for that app with Homebrew's own error.
 
 ## v0.6.27 - 2026-10-16
 
