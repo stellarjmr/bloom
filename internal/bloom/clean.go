@@ -1574,6 +1574,9 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 	goModRoot := resolvedDurableCleanRoot(os.Getenv("GOMODCACHE"), filepath.Join(home, "go", "pkg", "mod"), home)
 	renvRoot := resolvedDurableCleanRoot(os.Getenv("RENV_PATHS_CACHE"), filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv"), home)
 	ollamaRoot := resolvedDurableCleanRoot(os.Getenv("OLLAMA_MODELS"), filepath.Join(home, ".ollama", "models"), home)
+	// llama.cpp downloads -hf model weights, multi-GB GGUF files, into its
+	// cache directory: user-chosen models that never rebuild on their own.
+	llamaRoot := resolvedDurableCleanRoot(os.Getenv("LLAMA_CACHE"), filepath.Join(home, "Library", "Caches", "llama.cpp"), home)
 	roots := []string{
 		filepath.Join(home, ".cache", "huggingface"),
 		filepath.Join(home, ".cache", "torch"),
@@ -1595,6 +1598,8 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		filepath.Join(home, "mambaforge", "pkgs"),
 		filepath.Join(home, ".ollama", "models"),
 		ollamaRoot,
+		filepath.Join(home, "Library", "Caches", "llama.cpp"),
+		llamaRoot,
 		filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv"),
 		renvRoot,
 		filepath.Join(cargoHome, "registry", "src"),

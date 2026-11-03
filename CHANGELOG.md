@@ -14,6 +14,10 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - Update Claude Code's native install with `claude update` as the new `claude` task. A Homebrew cask or npm copy is skipped because the `cask` and `npm` tasks already update it, and configs saved by earlier versions pick the task up unless their `order` was curated by hand.
 
+### Fixed
+
+- Never clean llama.cpp's downloaded models: `bm clean` swept `~/Library/Caches/llama.cpp`, where `llama-cli -hf` and `llama-server -hf` keep multi-GB GGUF weights, as an ordinary app cache. The folder, and a relocated `LLAMA_CACHE`, now count as model stores.
+
 ## v0.6.27 - 2026-10-16
 
 ### Fixed

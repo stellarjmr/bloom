@@ -821,6 +821,8 @@ func TestRunCleanPreservesDurableDeveloperStateAndTargetsPreciseRebuildableCache
 	t.Setenv("RUSTUP_HOME", filepath.Join(home, "rustup"))
 	goModRoot := filepath.Join(home, "Library", "Caches", "go-modules")
 	t.Setenv("GOMODCACHE", goModRoot)
+	llamaRoot := filepath.Join(home, "Library", "Caches", "llama-models")
+	t.Setenv("LLAMA_CACHE", llamaRoot)
 
 	durable := []string{
 		filepath.Join(home, ".cache", "huggingface", "hub", "model.bin"),
@@ -841,6 +843,8 @@ func TestRunCleanPreservesDurableDeveloperStateAndTargetsPreciseRebuildableCache
 		filepath.Join(home, "miniforge3", "pkgs", "zlib.tar.bz2"),
 		filepath.Join(home, "mambaforge", "pkgs", "sqlite.tar.bz2"),
 		filepath.Join(home, ".ollama", "models", "blobs", "sha256-model"),
+		filepath.Join(home, "Library", "Caches", "llama.cpp", "ggml-org_gemma-3-1b-it-GGUF_gemma-3-1b-it-Q4_K_M.gguf"),
+		filepath.Join(llamaRoot, "relocated-Q8_0.gguf"),
 		filepath.Join(home, "Library", "Caches", "org.R-project.R", "R", "renv", "library", "package", "DESCRIPTION"),
 		filepath.Join(home, "cargo", "registry", "src", "index", "crate", "lib.rs"),
 		filepath.Join(home, "cargo", "git", "checkouts", "repo", "HEAD"),
