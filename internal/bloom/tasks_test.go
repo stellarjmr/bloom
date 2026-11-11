@@ -766,3 +766,143 @@ func TestRunClaudeSkipsWhenMissing(t *testing.T) {
 		t.Fatalf("result = %#v, calls = %#v; want a silent skip", res, r.calls)
 	}
 }
+
+type agyRunner struct {
+	*sequenceRunner
+	path string
+}
+
+func (r *agyRunner) LookPath(file string) (string, error) {
+	if file == "agy" && r.path != "" {
+		return r.path, nil
+	}
+	return "", errNotFound
+}
+
+func newAgyRunner(path string) *agyRunner {
+	return &agyRunner{
+		path: path,
+		sequenceRunner: &sequenceRunner{outputs: map[string][]CommandOutput{
+			"agy --version": {{Stdout: "1.5.5\n"}, {Stdout: "1.5.6\n"}},
+			"agy update":    {{Stdout: "Update successful! Please restart agy.\n"}},
+		}},
+	}
+}
+
+// installedAgy lays out the official installer's copy: a standalone agy
+// binary in ~/.local/bin.
+func installedAgy(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".local", "bin", "agy")
+	writeTestExecutable(t, path)
+	return path
+}
+
+func TestRunAgyUpdatesInstallerCopy(t *testing.T) {
+	r := newAgyRunner(installedAgy(t))
+
+	res := runAgy(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	want := []string{"agy --version", "agy update", "agy --version"}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", r.calls, want)
+	}
+	if res.Status != StatusOK || res.Message != "changed" || !reflect.DeepEqual(res.Summary, []string{"agy"}) {
+		t.Fatalf("result = %#v, want a changed agy summary", res)
+	}
+}
+
+func TestRunAgyUpdatesCopiesOutsideTheDefaultDirectory(t *testing.T) {
+	// The installer's --dir flag puts agy in any directory, and a user may
+	// link to that copy from elsewhere on PATH.
+	root := t.TempDir()
+	custom := filepath.Join(root, "tools", "agy")
+	writeTestExecutable(t, custom)
+	linked := filepath.Join(root, "bin", "agy")
+	linkTestExecutable(t, custom, linked)
+
+	for _, path := range []string{custom, linked} {
+		r := newAgyRunner(path)
+		if res := runAgy(context.Background(), r, UpdateOptions{Config: DefaultConfig()}); res.Err != nil || res.Status != StatusOK || len(r.calls) != 3 {
+			t.Fatalf("%s: result = %#v, calls = %#v; want agy update to run", path, res, r.calls)
+		}
+	}
+}
+
+func TestRunAgyReportsNoChangeWhenAlreadyCurrent(t *testing.T) {
+	r := newAgyRunner(installedAgy(t))
+	r.outputs["agy --version"] = []CommandOutput{{Stdout: "1.5.6\n"}, {Stdout: "1.5.6\n"}}
+	r.outputs["agy update"] = []CommandOutput{{Stdout: "You are already on the latest version.\n"}}
+
+	res := runAgy(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err != nil || res.Status != StatusOK || len(res.Summary) != 0 {
+		t.Fatalf("result = %#v, want ok without a summary", res)
+	}
+}
+
+func TestRunAgyReportsUpdateFailure(t *testing.T) {
+	r := newAgyRunner(installedAgy(t))
+	r.outputs["agy update"] = []CommandOutput{{Err: errors.New("exit status 1"), Stderr: "failed to download update\n"}}
+
+	res := runAgy(context.Background(), r, UpdateOptions{Config: DefaultConfig()})
+	if res.Err == nil || !strings.Contains(res.Output, "failed to download update") {
+		t.Fatalf("result = %#v, want the updater's failure", res)
+	}
+}
+
+func TestRunAgyDryRunDoesNotUpdate(t *testing.T) {
+	r := newAgyRunner(installedAgy(t))
+
+	res := runAgy(context.Background(), r, UpdateOptions{DryRun: true, Config: DefaultConfig()})
+	if res.Status != StatusDryRun || res.Message != "agy update" {
+		t.Fatalf("result = %#v, want a dry-run agy update", res)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("dry run ran %#v", r.calls)
+	}
+}
+
+func TestRunAgySkipsCopiesItCannotUpdate(t *testing.T) {
+	cases := []struct {
+		name   string
+		target string
+		reason string
+	}{
+		// The antigravity-cli cask links agy to the binary in its Caskroom,
+		// and the cask task upgrades that copy.
+		{name: "homebrew cask", target: "opt/homebrew/Caskroom/antigravity-cli/1.5.5,6740358537805824/antigravity", reason: "managed by Homebrew"},
+		{name: "broken link", target: "", reason: "install could not be resolved"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			launcher := filepath.Join(root, "opt", "homebrew", "bin", "agy")
+			target := filepath.Join(root, "missing", "agy")
+			if tt.target != "" {
+				target = filepath.Join(root, tt.target)
+				writeTestExecutable(t, target)
+			}
+			linkTestExecutable(t, target, launcher)
+			r := newAgyRunner(launcher)
+
+			for _, dryRun := range []bool{false, true} {
+				res := runAgy(context.Background(), r, UpdateOptions{DryRun: dryRun, Config: DefaultConfig()})
+				if res.Status != StatusSkipped || res.Message != tt.reason {
+					t.Fatalf("dryRun=%v result = %#v, want skipped %q", dryRun, res, tt.reason)
+				}
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("calls = %#v, want none", r.calls)
+			}
+		})
+	}
+}
+
+func TestRunAgySkipsWhenMissing(t *testing.T) {
+	r := newAgyRunner("")
+	if res := runAgy(context.Background(), r, UpdateOptions{Config: DefaultConfig()}); res.Status != StatusSkipped || res.Message != "" || len(r.calls) != 0 {
+		t.Fatalf("result = %#v, calls = %#v; want a silent skip", res, r.calls)
+	}
+}

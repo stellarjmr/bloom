@@ -5,7 +5,7 @@ progress_width = 24
 color = true
 
 [tasks]
-order = ["brew", "cask", "amp", "claude", "yazi", "nvim", "mason", "npm"]
+order = ["brew", "cask", "amp", "claude", "agy", "yazi", "nvim", "mason", "npm"]
 
 [clean]
 whitelist = ["~/Library/Caches/ms-playwright*", "~/.cache/huggingface*", "~/.cache/torch*", "~/.cache/tensorflow*", "~/.cache/wandb*", "~/.gradle/caches/build-cache-*/*", "~/.gradle/daemon/*", "~/Library/Caches/com.nssurge.surge-mac/*", "~/Library/Application Support/com.nssurge.surge-mac/*", "~/Library/Caches/pypoetry/virtualenvs*", "~/.cache/poetry/virtualenvs*", "~/Library/Caches/deno*", "~/Library/Caches/JetBrains*", "~/Library/Caches/com.jetbrains.toolbox*", "~/Library/Caches/tealdeer/tldr-pages", "~/Library/Application Support/JetBrains*", "~/Library/Caches/com.apple.finder", "~/Library/Mobile Documents*", "~/Library/Caches/com.apple.FontRegistry*", "~/Library/Caches/com.apple.spotlight*", "~/Library/Caches/com.apple.Spotlight*", "~/Library/Caches/CloudKit*", "~/Library/Caches/PassKit*", "~/.Trash", "FINDER_METADATA"]
@@ -24,6 +24,9 @@ exclude = []
 enabled = true
 
 [tasks.claude]
+enabled = true
+
+[tasks.agy]
 enabled = true
 
 [tasks.yazi]

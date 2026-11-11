@@ -85,7 +85,7 @@ Usage:
   bm --version
 
 Tasks:
-  brew, cask, amp, claude, yazi, nvim, mason, npm`)
+  brew, cask, amp, claude, agy, yazi, nvim, mason, npm`)
 }
 
 func (a *App) runConfig(args []string) int {

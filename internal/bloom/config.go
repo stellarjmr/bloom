@@ -25,12 +25,12 @@ type TaskConfig struct {
 	InstallHint string
 }
 
-var defaultTaskOrder = []string{"brew", "cask", "amp", "claude", "yazi", "nvim", "mason", "npm"}
+var defaultTaskOrder = []string{"brew", "cask", "amp", "claude", "agy", "yazi", "nvim", "mason", "npm"}
 
 // introducedTasks lists the default tasks added after configs started saving
 // an explicit order, oldest first. withIntroducedTasks uses it to bring an
 // order saved by an older version up to date.
-var introducedTasks = []string{"claude"}
+var introducedTasks = []string{"claude", "agy"}
 
 func DefaultTaskNames() []string {
 	return append([]string(nil), defaultTaskOrder...)
@@ -47,6 +47,7 @@ func DefaultConfig() Config {
 			"cask":    {Enabled: true},
 			"amp":     {Enabled: true},
 			"claude":  {Enabled: true},
+			"agy":     {Enabled: true},
 			"yazi":    {Enabled: true},
 			"nvim":    {Enabled: true},
 			"mason":   {Enabled: true},
@@ -150,7 +151,10 @@ func LoadConfig(path string) (Config, error) {
 // that names every task older than an introduced one was written before that
 // task existed, and the task joins it at its default position. An order that
 // leaves an older task out was curated by hand and stays as written, and a
-// [tasks.<name>] section means the config already knows the task.
+// [tasks.<name>] section means the config already knows the task. An earlier
+// introduced task that the order leaves out but that has its own section still
+// counts as listed: that is how a config turns such a task off, by hand or
+// through ConfigText's marker, and it says nothing about later tasks.
 func withIntroducedTasks(order []string, taskSections map[string]bool) []string {
 	for i, name := range introducedTasks {
 		if containsString(order, name) || taskSections[name] {
@@ -158,10 +162,14 @@ func withIntroducedTasks(order []string, taskSections map[string]bool) []string 
 		}
 		older := true
 		for _, task := range defaultTaskOrder {
-			if task != name && !containsString(introducedTasks[i:], task) && !containsString(order, task) {
-				older = false
-				break
+			if task == name || containsString(introducedTasks[i:], task) || containsString(order, task) {
+				continue
 			}
+			if containsString(introducedTasks[:i], task) && taskSections[task] {
+				continue
+			}
+			older = false
+			break
 		}
 		if older {
 			order = insertDefaultTask(order, name)

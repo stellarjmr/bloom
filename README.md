@@ -54,12 +54,13 @@ The default task set updates everything Bloom can detect:
 - `cask`: Homebrew cask updates
 - `amp`: `amp update`
 - `claude`: `claude update` for Claude Code's native install
+- `agy`: `agy update` for the Antigravity CLI
 - `yazi`: all Yazi package updates, including plugins and flavors
 - `nvim`: Neovim plugin updates for lazy.nvim/LazyVim and `vim.pack`
 - `mason`: Mason package updates
 - `npm`: global npm package updates
 
-Missing tools are skipped during `bm update` and are not counted in the progress total. The `claude` task runs only when `claude` resolves into Claude Code's native versions directory (`$XDG_DATA_HOME/claude/versions`, by default `~/.local/share/claude/versions`) or the legacy `~/.claude/local` install. A Homebrew cask or npm copy is skipped with a note, because `claude update` would hand it to the package manager that the `cask` or `npm` task already runs. For Homebrew updates, Bloom refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
+Missing tools are skipped during `bm update` and are not counted in the progress total. The `claude` task runs only when `claude` resolves into Claude Code's native versions directory (`$XDG_DATA_HOME/claude/versions`, by default `~/.local/share/claude/versions`) or the legacy `~/.claude/local` install. A Homebrew cask or npm copy is skipped with a note, because `claude update` would hand it to the package manager that the `cask` or `npm` task already runs. The `agy` task runs `agy update` for the copy that the official installer places in `~/.local/bin` or the directory given to its `--dir` flag. An `agy` linked from the `antigravity-cli` Homebrew cask is skipped with a note, because the `cask` task already upgrades it. For Homebrew updates, Bloom refreshes Homebrew metadata before checking outdated formulae and casks, so packages from tapped repositories are included.
 
 ## Remove packages
 
@@ -152,7 +153,7 @@ bm config init
 
 Bloom uses built-in defaults only when no config exists. If the config path is a broken symlink, runs through a broken directory link, or sits below something that is not a directory, every command, including `bm clean`, stops with a config error instead of silently dropping your settings and whitelist.
 
-A config saved by an earlier version picks up a newly added default task, such as `claude`, when its `order` still lists every older task and it has no `[tasks.<name>]` section for the new one; an `order` curated by hand stays as written. Set `enabled = false` under `[tasks.claude]` to turn the task off.
+A config saved by an earlier version picks up a newly added default task, such as `claude` or `agy`, when its `order` still lists every older task and it has no `[tasks.<name>]` section for the new one. A task added earlier that the `order` leaves out but that has its own section, such as a hand-added `[tasks.claude]` with `enabled = false`, still counts as listed. Any other `order` curated by hand stays as written. Set `enabled = false` under `[tasks.claude]` or `[tasks.agy]` to turn that task off.
 
 The config controls task order, enable/disable switches, per-task package `include`/`exclude` filters, the clean whitelist, progress width, and color output. Empty package filters mean update every detected package. Bloom also disables ANSI styling automatically when output is redirected or `TERM=dumb`; any non-empty `NO_COLOR` still disables styling explicitly. Run `bm config` to manage Tasks, Packages, Clean whitelist entries, List, Doctor, Path, and Reset with the interactive menu, or edit the TOML directly. See `config.example.toml`.
 

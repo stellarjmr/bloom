@@ -76,6 +76,12 @@ var builtinTasks = map[string]Task{
 		RequiredCommand: "claude",
 		Run:             runClaude,
 	},
+	"agy": {
+		Name:            "agy",
+		Description:     "Update the Antigravity CLI",
+		RequiredCommand: "agy",
+		Run:             runAgy,
+	},
 	"yazi": {
 		Name:            "yazi",
 		Description:     "Update Yazi plugins and flavors",
@@ -473,6 +479,47 @@ func pathBelowDirectory(path, dir string) bool {
 		}
 		current = parent
 	}
+}
+
+func runAgy(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
+	path, err := r.LookPath("agy")
+	if err != nil {
+		return TaskResult{Status: StatusSkipped}
+	}
+	if reason := agyInstallSkipReason(path); reason != "" {
+		return TaskResult{Status: StatusSkipped, Message: reason}
+	}
+	if opts.DryRun {
+		return TaskResult{Status: StatusDryRun, Message: "agy update"}
+	}
+	before := strings.TrimSpace(r.Run(ctx, "agy", "--version").Stdout)
+	update := r.Run(ctx, "agy", "update")
+	if update.Err != nil {
+		return failed(update)
+	}
+	after := strings.TrimSpace(r.Run(ctx, "agy", "--version").Stdout)
+	if before != "" && after != "" && before != after {
+		return TaskResult{Status: StatusOK, Message: "changed", Summary: []string{"agy"}}
+	}
+	return TaskResult{Status: StatusOK}
+}
+
+// agyInstallSkipReason reports why the agy task leaves the executable at path
+// alone, or "" when agy update should run. The official installer copies a
+// standalone agy binary into ~/.local/bin, or the directory given to its --dir
+// flag, so that copy can live anywhere. The antigravity-cli Homebrew cask
+// links agy into its Caskroom instead, and the cask task already upgrades it.
+func agyInstallSkipReason(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "install could not be resolved"
+	}
+	for _, part := range strings.Split(resolved, string(os.PathSeparator)) {
+		if part == "Caskroom" {
+			return "managed by Homebrew"
+		}
+	}
+	return ""
 }
 
 func runYazi(ctx context.Context, r Runner, opts UpdateOptions) TaskResult {
