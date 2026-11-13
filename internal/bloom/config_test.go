@@ -38,7 +38,9 @@ exclude = ["legacy"]
 	if cfg.Color {
 		t.Fatalf("Color = true, want false")
 	}
-	if !reflect.DeepEqual(cfg.TaskOrder, []string{"npm", "nvim"}) {
+	// The order predates the introduced tasks, which have no section here, so
+	// they join it ahead of npm: none of the tasks before them is listed.
+	if !reflect.DeepEqual(cfg.TaskOrder, []string{"claude", "agy", "npm", "nvim"}) {
 		t.Fatalf("TaskOrder = %#v", cfg.TaskOrder)
 	}
 	if cfg.Tasks["npm"].Enabled {
@@ -387,20 +389,80 @@ order = ["npm", "amp", "brew", "cask", "yazi", "nvim", "mason"]
 	}
 }
 
-func TestLoadConfigKeepsCuratedOrdersAndKnownTasks(t *testing.T) {
+func TestLoadConfigAddsIntroducedTasksToAHandCuratedOrder(t *testing.T) {
+	// Leaving an older task out of the order turns that task off; it cannot
+	// opt out of a task the order was written before.
+	cases := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name: "an order saved before claude without amp",
+			content: `
+[tasks]
+order = ["brew", "cask", "yazi", "nvim", "mason", "npm"]
+`,
+			want: []string{"brew", "cask", "claude", "agy", "yazi", "nvim", "mason", "npm"},
+		},
+		{
+			name: "an order saved before claude without npm",
+			content: `
+[tasks]
+order = ["brew", "cask", "amp", "yazi", "nvim", "mason"]
+`,
+			want: []string{"brew", "cask", "amp", "claude", "agy", "yazi", "nvim", "mason"},
+		},
+		{
+			name: "an order saved with claude without npm",
+			content: `
+[tasks]
+order = ["brew", "cask", "amp", "claude", "yazi", "nvim", "mason"]
+`,
+			want: []string{"brew", "cask", "amp", "claude", "agy", "yazi", "nvim", "mason"},
+		},
+		{
+			name: "a minimal order",
+			content: `
+[tasks]
+order = ["brew"]
+`,
+			want: []string{"brew", "claude", "agy"},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadTestConfig(t, tt.content)
+			if !reflect.DeepEqual(cfg.TaskOrder, tt.want) {
+				t.Fatalf("TaskOrder = %#v, want %#v", cfg.TaskOrder, tt.want)
+			}
+			for _, name := range introducedTasks {
+				if !cfg.Tasks[name].Enabled {
+					t.Fatalf("introduced task %s must start enabled", name)
+				}
+			}
+			// The tasks the order left out stay out after a save.
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := SaveConfig(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			saved, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(saved.TaskOrder, tt.want) {
+				t.Fatalf("after a save TaskOrder = %#v, want %#v", saved.TaskOrder, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigKeepsIntroducedTasksAConfigKnows(t *testing.T) {
 	cases := []struct {
 		name    string
 		content string
 		left    []string
 	}{
-		{
-			name: "curated order leaves an older task out",
-			content: `
-[tasks]
-order = ["brew", "cask", "amp", "yazi", "nvim", "mason"]
-`,
-			left: []string{"claude", "agy"},
-		},
 		{
 			name: "a claude section means the config already knows the task",
 			content: `
@@ -424,12 +486,15 @@ enabled = false
 			left: []string{"claude"},
 		},
 		{
-			name: "an order curated after claude leaves an older task out",
+			name: "a disabled claude section opts a hand-curated order out",
 			content: `
 [tasks]
-order = ["brew", "cask", "amp", "claude", "yazi", "nvim", "mason"]
+order = ["brew", "cask", "yazi", "nvim", "mason", "npm"]
+
+[tasks.claude]
+enabled = false
 `,
-			left: []string{"agy"},
+			left: []string{"claude"},
 		},
 		{
 			name: "a disabled agy section opts out",

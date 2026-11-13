@@ -147,31 +147,16 @@ func LoadConfig(path string) (Config, error) {
 }
 
 // withIntroducedTasks adds default tasks that are newer than a saved order.
-// Bloom's own config writers save every default task in order, so an order
-// that names every task older than an introduced one was written before that
-// task existed, and the task joins it at its default position. An order that
-// leaves an older task out was curated by hand and stays as written, and a
-// [tasks.<name>] section means the config already knows the task. An earlier
-// introduced task that the order leaves out but that has its own section still
-// counts as listed: that is how a config turns such a task off, by hand or
-// through ConfigText's marker, and it says nothing about later tasks.
+// An order that names neither an introduced task nor has a [tasks.<name>]
+// section for it was written before the task existed, so the task joins it at
+// its default position. That holds for an order curated by hand too: leaving
+// out an older task, such as amp on a machine without it, turns that task off
+// and says nothing about tasks the order could not know. A section means the
+// config already knows the task, which is how a config turns it off, by hand
+// or through ConfigText's marker, so the order then stays as written.
 func withIntroducedTasks(order []string, taskSections map[string]bool) []string {
-	for i, name := range introducedTasks {
-		if containsString(order, name) || taskSections[name] {
-			continue
-		}
-		older := true
-		for _, task := range defaultTaskOrder {
-			if task == name || containsString(introducedTasks[i:], task) || containsString(order, task) {
-				continue
-			}
-			if containsString(introducedTasks[:i], task) && taskSections[task] {
-				continue
-			}
-			older = false
-			break
-		}
-		if older {
+	for _, name := range introducedTasks {
+		if !containsString(order, name) && !taskSections[name] {
 			order = insertDefaultTask(order, name)
 		}
 	}

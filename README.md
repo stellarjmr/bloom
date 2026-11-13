@@ -153,7 +153,7 @@ bm config init
 
 Bloom uses built-in defaults only when no config exists. If the config path is a broken symlink, runs through a broken directory link, or sits below something that is not a directory, every command, including `bm clean`, stops with a config error instead of silently dropping your settings and whitelist.
 
-A config saved by an earlier version picks up a newly added default task, such as `claude` or `agy`, when its `order` still lists every older task and it has no `[tasks.<name>]` section for the new one. A task added earlier that the `order` leaves out but that has its own section, such as a hand-added `[tasks.claude]` with `enabled = false`, still counts as listed. Any other `order` curated by hand stays as written. Set `enabled = false` under `[tasks.claude]` or `[tasks.agy]` to turn that task off.
+A config saved by an earlier version picks up a newly added default task, such as `claude` or `agy`, when its `order` does not list the task and the file has no `[tasks.<name>]` section for it, even if the `order` was edited by hand. Leaving an older task out of the `order` turns off only that task. Set `enabled = false` under `[tasks.claude]` or `[tasks.agy]` to turn a new task off.
 
 The config controls task order, enable/disable switches, per-task package `include`/`exclude` filters, the clean whitelist, progress width, and color output. Empty package filters mean update every detected package. Bloom also disables ANSI styling automatically when output is redirected or `TERM=dumb`; any non-empty `NO_COLOR` still disables styling explicitly. Run `bm config` to manage Tasks, Packages, Clean whitelist entries, List, Doctor, Path, and Reset with the interactive menu, or edit the TOML directly. See `config.example.toml`.
 
