@@ -1631,6 +1631,9 @@ func cleanPathOverlapsDurableDeveloperState(path string) bool {
 		ollamaRoot,
 		filepath.Join(home, "Library", "Caches", "llama.cpp"),
 		llamaRoot,
+		// Buzz keeps its downloaded Whisper models, the plugins the user
+		// installed, and their presentation CSS in its cache folder.
+		filepath.Join(home, "Library", "Caches", "Buzz"),
 		// Jupyter's runtime folder holds the connection files of running
 		// servers and kernels (jpserver-<pid>.json, kernel-<id>.json).
 		filepath.Join(home, ".jupyter", "runtime"),
@@ -1874,6 +1877,13 @@ var protectedCleanPathPatterns = []string{
 	"/private/var/folders/*/C/com.paceap.eden.iLokLicenseManager*",
 	"*/Library/Caches/ms-playwright",
 	"*/Library/Caches/ms-playwright/*",
+	// Camoufox and Cypress install the browser and test runner they launch
+	// here, like Playwright: removing them breaks every run until a download
+	// of a gigabyte or more.
+	"*/Library/Caches/camoufox",
+	"*/Library/Caches/camoufox/*",
+	"*/Library/Caches/Cypress",
+	"*/Library/Caches/Cypress/*",
 	"*/Library/Caches/app.cotypist.Cotypist",
 	"*/Library/Caches/app.cotypist.Cotypist/*",
 	"*/Library/Caches/com.displaylink.DisplayLinkUserAgent",

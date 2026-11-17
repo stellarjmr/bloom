@@ -78,13 +78,15 @@ Google's `~/Library/Caches/GIPPseudonymousID` identity store and `~/Library/Cach
 
 Jupyter's `~/.jupyter/runtime` folder is never cleaned: its files are the connection details of running servers and kernels, not a cache.
 
+Browsers and test runners that tools install under `~/Library/Caches` and launch from there are never cleaned either: Playwright's `ms-playwright`, Camoufox's `camoufox`, and Cypress's `Cypress`. Removing them breaks every run until a download of a gigabyte or more.
+
 Crash reports inside `~/Library/Logs/DiagnosticReports` are cleanable, but the directory itself stays: macOS's crash reporter cannot recreate it under its sandbox and would silently stop saving later reports.
 
 The interactive flow lives at menu item 5. Use `bm clean --dry-run` to preview targets first, and use Config → Clean or `bm clean --whitelist` to choose additional whitelist entries that Bloom should protect. The pip and Yarn v1 rows include the macOS cache locations those tools actually use under `~/Library/Caches`. A Bun row protects Bun's install cache in `~/.bun/install/cache`. Sizes use physical disk occupancy; each directory probe is time-bounded, and Bloom skips an item whose complete size cannot be measured.
 
 Rust cleanup honors validated absolute `CARGO_HOME` and `RUSTUP_HOME` values, including version-manager layouts. It targets only redundant Cargo registry archives and Rustup downloads. Registry sources and indexes, Cargo git state, installed binaries, toolchains, and toolchain documentation stay untouched; active Rust builds and cache roots that escape their selected tool home are skipped.
 
-Bloom also keeps complete dependency, toolchain, model, and environment stores off the automatic clean path. This includes Maven repositories, Go modules, SBT/Ivy and Cabal state, Conda package roots, Ollama models, llama.cpp's downloaded models (`~/Library/Caches/llama.cpp`, or `LLAMA_CACHE`), R renv libraries, downloaded model/data stores, Deno state, and Poetry virtual environments. Precise rebuildable leaves such as Go build output and Poetry's macOS `artifacts` and package-download `cache` children remain eligible independently.
+Bloom also keeps complete dependency, toolchain, model, and environment stores off the automatic clean path. This includes Maven repositories, Go modules, SBT/Ivy and Cabal state, Conda package roots, Ollama models, llama.cpp's downloaded models (`~/Library/Caches/llama.cpp`, or `LLAMA_CACHE`), Buzz's Whisper models and plugins (`~/Library/Caches/Buzz`), R renv libraries, downloaded model/data stores, Deno state, and Poetry virtual environments. Precise rebuildable leaves such as Go build output and Poetry's macOS `artifacts` and package-download `cache` children remain eligible independently.
 
 uv's cache (`~/.cache/uv`) and Bun's install cache (`~/.bun/install/cache`) wait while `uv`, `uvx`, `bun`, or `bunx` runs, including tools and MCP servers that `uvx` started from environments inside the uv cache. VS Code's Chromium caches under `~/Library/Application Support/Code` likewise wait while a process from `Visual Studio Code.app` or a `Code Helper` process runs, which also covers a renamed bundle.
 

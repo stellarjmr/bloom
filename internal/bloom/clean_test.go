@@ -1379,6 +1379,48 @@ func TestRunCleanKeepsGoogleIdentityAndClearcutState(t *testing.T) {
 	}
 }
 
+// Camoufox and Cypress run the browser and test runner they install under
+// ~/Library/Caches, and Buzz keeps downloaded models there; the user cache
+// sweep must keep each of them, even with an empty whitelist.
+func TestRunCleanKeepsToolInstallsAndModelsInUserCaches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	caches := filepath.Join(home, "Library", "Caches")
+	kept := []string{
+		filepath.Join(caches, "camoufox", "version.json"),
+		filepath.Join(caches, "camoufox", "Camoufox.app", "Contents", "MacOS", "camoufox"),
+		filepath.Join(caches, "Cypress", "15.4.0", "Cypress.app", "Contents", "MacOS", "Cypress"),
+		filepath.Join(caches, "Cypress", "15.4.0", "binary_state.json"),
+		filepath.Join(caches, "Buzz", "models", "whisper", "base.pt"),
+		filepath.Join(caches, "Buzz", "plugins", "speaker-diarization", "plugin.json"),
+	}
+	control := filepath.Join(caches, "DropApp", "state")
+	for _, path := range append(append([]string{}, kept...), control) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Clean.Whitelist = nil
+	idle := &cleanProbeRunner{processTables: []string{"/sbin/launchd\n"}}
+	res := RunClean(context.Background(), CleanOptions{DryRun: true, Config: cfg, Runner: idle})
+	if !cleanResultCovers(res, control) {
+		t.Fatalf("control cache missing from dry run: %#v", res.Targets)
+	}
+	for _, path := range kept {
+		if cleanResultCovers(res, path) {
+			t.Errorf("%q was targeted: %#v", path, res.Targets)
+		}
+		if err := validateCleanPath(path); err == nil {
+			t.Errorf("validateCleanPath accepted %q", path)
+		}
+	}
+}
+
 func TestRunCleanLeavesGitConfigLockAndBackups(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
