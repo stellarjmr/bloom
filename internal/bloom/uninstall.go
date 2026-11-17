@@ -2671,19 +2671,24 @@ func parseNonNegativeInt(value string) (int64, error) {
 	return strconv.ParseInt(value, 10, 64)
 }
 
-// FormatBytes returns a short human readable size from KB.
+// FormatBytes returns a short human readable size from KB. A value that
+// rounds up to 1024.0 of a unit reads as 1.0 of the next one.
 func FormatBytes(kb int64) string {
 	bytes := kb * 1024
-	switch {
-	case bytes >= 1<<30:
-		return fmt.Sprintf("%.1fG", float64(bytes)/float64(1<<30))
-	case bytes >= 1<<20:
-		return fmt.Sprintf("%.1fM", float64(bytes)/float64(1<<20))
-	case bytes >= 1<<10:
-		return fmt.Sprintf("%.1fK", float64(bytes)/float64(1<<10))
-	default:
+	if bytes < 1<<10 {
 		return fmt.Sprintf("%dB", bytes)
 	}
+	value := float64(bytes) / float64(1<<10)
+	units := []string{"K", "M", "G"}
+	unit := 0
+	for value >= 1024 || strconv.FormatFloat(value, 'f', 1, 64) == "1024.0" {
+		if unit == len(units)-1 {
+			break
+		}
+		value /= 1024
+		unit++
+	}
+	return strconv.FormatFloat(value, 'f', 1, 64) + units[unit]
 }
 
 // PrintAppList writes a TSV listing of installed apps:

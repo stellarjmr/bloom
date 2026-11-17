@@ -181,3 +181,25 @@ func TestRunCleanContinuesAfterOneSizeProbeFails(t *testing.T) {
 		t.Fatalf("size failure missing from result: %#v", res.Failed)
 	}
 }
+
+// A size that prints as 1024.0 of a unit reads as 1.0 of the next one, the
+// way Finder shows it.
+func TestFormatBytesStepsUpWhenRoundingReachesTheNextUnit(t *testing.T) {
+	cases := map[int64]string{
+		0:          "0B",
+		1:          "1.0K",
+		1023:       "1023.0K",
+		1024:       "1.0M",
+		1048524:    "1023.9M",
+		1048525:    "1.0G",
+		1048575:    "1.0G",
+		1048576:    "1.0G",
+		5000000:    "4.8G",
+		1073741823: "1024.0G",
+	}
+	for kb, want := range cases {
+		if got := FormatBytes(kb); got != want {
+			t.Errorf("FormatBytes(%d) = %q, want %q", kb, got, want)
+		}
+	}
+}

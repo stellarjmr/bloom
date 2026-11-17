@@ -750,7 +750,8 @@ format_kb() {
   if ((kb >= 1024 * 1024)); then
     awk -v k="$kb" 'BEGIN{printf "%.1fG", k/1024/1024}'
   elif ((kb >= 1024)); then
-    awk -v k="$kb" 'BEGIN{printf "%.1fM", k/1024}'
+    # A size that rounds to 1024.0M reads as 1.0G.
+    awk -v k="$kb" 'BEGIN{m=sprintf("%.1f", k/1024); if (m+0 >= 1024) printf "%.1fG", k/1024/1024; else printf "%sM", m}'
   else
     printf '%dK' "$kb"
   fi
