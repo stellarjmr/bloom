@@ -135,8 +135,13 @@ func TestUninstallStableAppKeepsFoldersAChannelBuildUses(t *testing.T) {
 			t.Fatalf("the app's own leftover %q stayed: %v", moved, err)
 		}
 	}
-	if !reflect.DeepEqual(res.FamilyBuilds, []string{nightly}) || len(res.FamilyKept) != 2 {
+	// The shared profiles are browser profiles, which every uninstall keeps;
+	// the shared cache stays for the other build.
+	if !reflect.DeepEqual(res.FamilyBuilds, []string{nightly}) || !reflect.DeepEqual(res.FamilyKept, []string{sharedCache}) {
 		t.Fatalf("family builds = %#v, kept = %#v", res.FamilyBuilds, res.FamilyKept)
+	}
+	if len(res.KeptData) != 1 || res.KeptData[0].Path != filepath.Dir(profiles) {
+		t.Fatalf("KeptData = %#v, want the Firefox profiles", res.KeptData)
 	}
 	if res.SharedBundleSibling || res.SharedBundleUncertain {
 		t.Fatalf("a family build must not switch to shared-bundle mode: %#v", res)

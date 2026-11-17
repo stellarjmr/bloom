@@ -625,22 +625,62 @@ type UninstallKeptPath struct {
 type protectedUninstallDataRoot struct {
 	path   string
 	reason string
-	// uninstallExempt lists paths inside the root, relative to it, that the
-	// owning cask's uninstall stanza removes as part of the app itself.
-	uninstallExempt []string
+	// appOwned lists paths inside the root, relative to it, that belong to
+	// an app rather than to the user's data: Steam's own client bundle, or
+	// the native messaging manifests and extension descriptors other apps
+	// install into a browser profile. A cask step may remove them.
+	appOwned []string
 }
 
+// protectedUninstallDataRoots lists data an uninstall keeps because it is
+// the user's own content rather than app state, following Mole's personal
+// data review: game and save libraries, virtual machines and Windows
+// bottles, browser profiles, and the few stores that live under Caches.
 func protectedUninstallDataRoots(home string) []protectedUninstallDataRoot {
-	return []protectedUninstallDataRoot{
+	support := filepath.Join(home, "Library", "Application Support")
+	caches := filepath.Join(home, "Library", "Caches")
+	containers := filepath.Join(home, "Library", "Containers")
+	roots := []protectedUninstallDataRoot{
 		// Steam's name match reaches this folder, which holds the installed
 		// game library (steamapps) and local saves (userdata). The steam
 		// cask's zap lists it too.
-		{path: filepath.Join(home, "Library", "Application Support", "Steam"), reason: "the Steam library with installed games and saves", uninstallExempt: []string{"Steam.AppBundle"}},
+		{path: filepath.Join(support, "Steam"), reason: "the Steam library with installed games and saves", appOwned: []string{"Steam.AppBundle"}},
+		{path: filepath.Join(containers, "com.utmapp.UTM"), reason: "UTM's virtual machines"},
+		{path: filepath.Join(support, "VirtualBuddy"), reason: "VirtualBuddy's virtual machines"},
+		{path: filepath.Join(support, "CrossOver"), reason: "CrossOver bottles with installed Windows apps"},
+		{path: filepath.Join(containers, "com.isaacmarovitz.Whisky"), reason: "Whisky bottles with installed Windows apps"},
+		{path: filepath.Join(caches, "Buzz"), reason: "Buzz's Whisper models and plugins"},
+		{path: filepath.Join(caches, "com.spotify.client"), reason: "Spotify's offline music"},
+		{path: filepath.Join(caches, "com.raycast.macos"), reason: "Raycast's clipboard history"},
+		{path: filepath.Join(caches, "MullvadBrowser"), reason: "the Mullvad Browser profile"},
 	}
+	for _, name := range []string{
+		"OpenEmu", "Dolphin", "PCSX2", "RetroArch", "PrismLauncher", "minecraft", "Citra",
+		"Cemu", "Ryujinx", "PPSSPP", "RPCS3", "MultiMC", "ATLauncher",
+	} {
+		roots = append(roots, protectedUninstallDataRoot{path: filepath.Join(support, name), reason: "game libraries and saves"})
+	}
+	browserIntegrations := []string{"NativeMessagingHosts", "External Extensions"}
+	for _, name := range []string{
+		"Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary",
+		"Microsoft Edge", "Microsoft Edge Beta", "Microsoft Edge Dev", "Microsoft Edge Canary",
+		"com.operasoftware.Opera", "com.operasoftware.OperaGX", "com.operasoftware.OperaNext",
+		"com.operasoftware.OperaDeveloper", "Chromium", "Vivaldi", "Arc", "Firefox", "zen",
+	} {
+		roots = append(roots, protectedUninstallDataRoot{path: filepath.Join(support, filepath.FromSlash(name)), reason: "browser profiles with passwords, bookmarks, and history", appOwned: browserIntegrations})
+	}
+	var braveIntegrations []string
+	for _, channel := range []string{"Brave-Browser", "Brave-Browser-Beta", "Brave-Browser-Nightly", "Brave-Origin", "Brave-Origin-Beta", "Brave-Origin-Nightly"} {
+		for _, integration := range browserIntegrations {
+			braveIntegrations = append(braveIntegrations, channel+"/"+integration)
+		}
+	}
+	roots = append(roots, protectedUninstallDataRoot{path: filepath.Join(support, "BraveSoftware"), reason: "browser profiles with passwords, bookmarks, and history", appOwned: braveIntegrations})
+	return roots
 }
 
-// protectedUninstallData reports the protected root that path is or lies
-// inside, compared case-insensitively like the default APFS volume.
+// protectedUninstallData reports the protected root that path is, lies
+// inside, or holds, compared case-insensitively like the default APFS volume.
 func protectedUninstallData(path string) (UninstallKeptPath, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -649,9 +689,11 @@ func protectedUninstallData(path string) (UninstallKeptPath, bool) {
 	path = filepath.Clean(path)
 	for _, root := range protectedUninstallDataRoots(home) {
 		rootPath := filepath.Clean(root.path)
-		if strings.EqualFold(path, rootPath) ||
-			(len(path) > len(rootPath) && path[len(rootPath)] == os.PathSeparator && strings.EqualFold(path[:len(rootPath)], rootPath)) {
+		if pathAtOrBelowFold(path, rootPath) {
 			return UninstallKeptPath{Path: rootPath, Reason: root.reason}, true
+		}
+		if pathAtOrBelowFold(rootPath, path) {
+			return UninstallKeptPath{Path: path, Reason: "holding " + root.reason}, true
 		}
 	}
 	return UninstallKeptPath{}, false

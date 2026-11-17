@@ -18,6 +18,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 - A config whose task `order` was edited by hand, for example to leave `amp` out, now picks up newly added tasks such as `claude` and `agy` too. Such an `order` used to stay as written, so `bm update` never ran `claude update` there. A `[tasks.<name>]` section with `enabled = false` keeps a new task off. v0.6.28 wrote that section for `claude` whenever it saved such a config; select `claude` under `bm config` → Tasks to turn it on.
 - Uninstall the `steam` cask without `--zap` instead of refusing it. v0.6.28 refused that cask because its zap trashes the Steam library, and pointed to `brew uninstall --cask steam` without `--zap`; Bloom now runs that itself, keeps the library, and moves Steam's other leftovers to Trash.
+- Keep personal data when `bm uninstall` removes an app, as it already kept the Steam library: virtual machines (UTM, VirtualBuddy), Windows bottles (CrossOver, Whisky), game and emulator libraries (OpenEmu, Dolphin, PCSX2, RetroArch, Citra, Cemu, Ryujinx, PPSSPP, RPCS3, Minecraft and its launchers), browser profiles (Chrome, Brave, Edge, Opera, Chromium, Vivaldi, Arc, Firefox, Zen), Buzz's Whisper models, Spotify's offline music, Raycast's clipboard history, and the Mullvad Browser profile. They stay in place and the summary names them; a cask whose zap would take them uninstalls without `--zap`.
 
 ### Fixed
 

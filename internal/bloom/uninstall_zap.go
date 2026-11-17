@@ -31,14 +31,14 @@ const (
 
 // zapReachRoot is a folder that holds the user's own files or protected
 // data. A cask step that would trash or delete anything in it, or the folder
-// itself, keeps Bloom from running brew uninstall. uninstallExempt names
-// paths inside the root, relative to it, that the owning cask's own
-// uninstall stanza may remove: Steam's deletes its client bundle,
-// Steam.AppBundle, inside the library folder.
+// itself, keeps --zap out or refuses the cask. appOwned names paths inside
+// the root, relative to it, that belong to an app and that a cask step may
+// remove: Steam's client bundle, or the manifests apps install into a
+// browser profile.
 type zapReachRoot struct {
-	path            string
-	reason          string
-	uninstallExempt []string
+	path     string
+	reason   string
+	appOwned []string
 }
 
 func zapReachRoots(home string) []zapReachRoot {
@@ -53,24 +53,23 @@ func zapReachRoots(home string) []zapReachRoot {
 		zapReachRoot{path: filepath.Join(home, ".config"), reason: "in your ~/.config folder"},
 	)
 	for _, root := range protectedUninstallDataRoots(home) {
-		roots = append(roots, zapReachRoot{path: root.path, reason: root.reason, uninstallExempt: root.uninstallExempt})
+		roots = append(roots, zapReachRoot{path: root.path, reason: root.reason, appOwned: root.appOwned})
 	}
 	return roots
 }
 
-// rootsForUninstallEntry leaves out a root whose uninstallExempt path holds
-// the uninstall entry's path. Every other root still judges the entry, so a
-// client bundle linked into Documents is still refused.
-func rootsForUninstallEntry(pattern, home string, roots []zapReachRoot) []zapReachRoot {
-	expanded := expandHomebrewHomePlaceholder(pattern, home)
-	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
-		expanded = home + expanded[1:]
-	}
+// rootsForEntry leaves out a root whose appOwned path holds one brace-free
+// alternative of an entry, judged after its .. segments are resolved, since
+// Homebrew checks for them only before it expands braces. Every other root
+// still judges the alternative, so a client bundle or manifest folder linked
+// into Documents still counts.
+func rootsForEntry(alternative string, roots []zapReachRoot) []zapReachRoot {
+	cleaned := filepath.Clean(alternative)
 	var out []zapReachRoot
 	for _, root := range roots {
 		exempt := false
-		for _, rel := range root.uninstallExempt {
-			if pathAtOrBelowFold(expanded, filepath.Join(root.path, rel)) {
+		for _, rel := range root.appOwned {
+			if pathAtOrBelowFold(cleaned, filepath.Join(root.path, rel)) {
 				exempt = true
 				break
 			}
@@ -121,11 +120,7 @@ func caskZapReachedData(ctx context.Context, runner Runner, token string) ([]cas
 	var reached []caskReach
 	seen := map[string]bool{}
 	for _, pattern := range patterns {
-		patternRoots := roots
-		if pattern.stanza == caskStanzaUninstall {
-			patternRoots = rootsForUninstallEntry(pattern.path, home, roots)
-		}
-		for _, item := range zapPatternReach(pattern.path, home, patternRoots) {
+		for _, item := range zapPatternReach(pattern.path, home, roots) {
 			key := pattern.stanza + "\x00" + item.Path
 			if !seen[key] {
 				seen[key] = true
@@ -550,7 +545,7 @@ func zapPatternReach(pattern, home string, roots []zapReachRoot) []UninstallKept
 	}
 	var reached []UninstallKeptPath
 	for _, alternative := range alternatives {
-		reached = append(reached, zapAlternativeReach(goGlobNegation(alternative), roots)...)
+		reached = append(reached, zapAlternativeReach(goGlobNegation(alternative), rootsForEntry(alternative, roots))...)
 	}
 	return reached
 }

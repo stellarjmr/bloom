@@ -184,3 +184,53 @@ func (r *namedCaskRunner) Run(_ context.Context, name string, args ...string) Co
 		return CommandOutput{Err: errNotFound}
 	}
 }
+
+// Uninstall keeps personal data the app's leftover rules match: models,
+// virtual machines, Windows bottles, game libraries, browser profiles, and
+// the stores that live under Caches. A leftover that holds such a folder
+// stays whole.
+func TestFindRelatedPathsKeepsPersonalData(t *testing.T) {
+	cases := []struct {
+		name, appName, bundleID, data, want, reason string
+	}{
+		{"Buzz models", "Buzz", "com.chidiwilliams.buzz", "Library/Caches/Buzz/models/whisper/base.pt", "Library/Caches/Buzz", "Buzz's Whisper models and plugins"},
+		{"UTM virtual machines", "UTM", "com.utmapp.UTM", "Library/Containers/com.utmapp.UTM/Data/Documents/Linux.utm/config.plist", "Library/Containers/com.utmapp.UTM", "UTM's virtual machines"},
+		{"CrossOver bottles", "CrossOver", "com.codeweavers.CrossOver", "Library/Application Support/CrossOver/Bottles/Steam/drive_c/x", "Library/Application Support/CrossOver", "CrossOver bottles with installed Windows apps"},
+		{"OpenEmu library", "OpenEmu", "org.openemu.OpenEmu", "Library/Application Support/OpenEmu/Game Library/roms/game.nes", "Library/Application Support/OpenEmu", "game libraries and saves"},
+		{"Firefox profiles", "Firefox", "org.mozilla.firefox", "Library/Application Support/Firefox/Profiles/abc.default/key4.db", "Library/Application Support/Firefox", "browser profiles with passwords, bookmarks, and history"},
+		{"Spotify offline music", "Spotify", "com.spotify.client", "Library/Caches/com.spotify.client/Storage/track.file", "Library/Caches/com.spotify.client", "Spotify's offline music"},
+		{"a folder holding Chrome's profiles", "Google", "com.example.google", "Library/Application Support/Google/Chrome/Default/Login Data", "Library/Application Support/Google", "holding browser profiles with passwords, bookmarks, and history"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			appPath := filepath.Join(home, "Applications", tt.appName+".app")
+			writeTestInfoPlist(t, appPath, tt.bundleID, tt.appName)
+			data := filepath.Join(home, tt.data)
+			if err := os.MkdirAll(filepath.Dir(data), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(data, []byte("data"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			related := findRelatedPaths(AppEntry{Path: appPath, Name: tt.appName, BundleID: tt.bundleID}, leftoverFamily{})
+			want := filepath.Join(home, tt.want)
+			for _, p := range related.paths {
+				if pathAtOrBelowFold(p, want) || pathAtOrBelowFold(want, p) {
+					t.Fatalf("leftovers include personal data %q: %#v", p, related.paths)
+				}
+			}
+			if len(related.keptData) != 1 || !strings.EqualFold(related.keptData[0].Path, want) || related.keptData[0].Reason != tt.reason {
+				t.Fatalf("kept = %#v, want %q (%s)", related.keptData, want, tt.reason)
+			}
+			if err := movePathToTrashStubborn(context.Background(), &recordingRunner{outputs: map[string]CommandOutput{}}, want); err == nil {
+				t.Fatalf("the uninstall Trash sink moved %q", want)
+			}
+			if _, err := os.Lstat(data); err != nil {
+				t.Fatalf("%q changed: %v", data, err)
+			}
+		})
+	}
+}

@@ -881,3 +881,83 @@ func TestPrintUninstallSummaryExplainsALeftOutZap(t *testing.T) {
 		t.Fatalf("summary repeats kept data or names --zap:\n%s", text)
 	}
 }
+
+// Browser profiles are kept, but the manifests apps install into them are
+// the apps' own: a step that removes only those runs as written.
+func TestUninstallAppLetsCasksRemoveTheirBrowserManifests(t *testing.T) {
+	manifests := []string{
+		"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.example.foo.json",
+		"Library/Application Support/Microsoft Edge/External Extensions/abcdefghijklmnop.json",
+		"Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.example.foo.json",
+	}
+	cases := []struct {
+		name string
+		info CommandOutput
+	}{
+		{"zap", caskInfoJSON("foo", `{"trash":["~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.example.foo.json","~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.example.foo.json"]}`)},
+		{"uninstall stanza", caskInfoCaskJSON("foo", `"artifacts":[{"uninstall":[{"delete":["~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.example.foo.json","~/Library/Application Support/Microsoft Edge/External Extensions/abcdefghijklmnop.json"]}]},{"app":["foo.app"]}]`)},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			appPath, _ := caskUninstallTestApp(t)
+			home := os.Getenv("HOME")
+			writeZapTestFiles(t, home, append(append([]string{}, manifests...), "Library/Application Support/Google/Chrome/Default/Bookmarks"))
+			runner := &zapStanzaRunner{token: "foo", appPath: appPath, infos: []CommandOutput{tt.info}}
+
+			res := UninstallApp(context.Background(), runner, zapTestApp(appPath), false)
+			if res.Err != nil || res.ZapSkipped {
+				t.Fatalf("uninstall error = %v, zap left out = %v (%#v), want the manifests' steps to run", res.Err, res.ZapSkipped, res.ZapKept)
+			}
+			if !runnerCallContains(runner.calls, "brew uninstall --cask --force --zap foo") {
+				t.Fatalf("zap did not run: %v", runner.calls)
+			}
+		})
+	}
+}
+
+// A browser's own zap of its whole profile folder leaves out --zap, so the
+// profile stays.
+func TestUninstallAppKeepsABrowserProfileFromItsZap(t *testing.T) {
+	appPath, _ := caskUninstallTestApp(t)
+	home := os.Getenv("HOME")
+	writeZapTestFiles(t, home, []string{"Library/Application Support/Google/Chrome/Default/Login Data"})
+	runner := &zapStanzaRunner{token: "foo", appPath: appPath, infos: []CommandOutput{caskInfoJSON("foo", `{"trash":["~/Library/Application Support/Google/Chrome","~/Library/Caches/Google/Chrome"]}`)}}
+
+	res := UninstallApp(context.Background(), runner, zapTestApp(appPath), false)
+	requireZapLeftOut(t, res, runner, false, "Google/Chrome (browser profiles with passwords, bookmarks, and history)")
+}
+
+// The manifest exemption is judged per expanded alternative after its ..
+// segments resolve: Homebrew checks for .. only before it expands braces,
+// so {x,../Default} under NativeMessagingHosts reaches the profile itself.
+func TestUninstallAppJudgesTheManifestExemptionAfterExpansion(t *testing.T) {
+	entry := `"~/Library/Application Support/Google/Chrome/NativeMessagingHosts/{x,../Default}"`
+	cases := []struct {
+		name string
+		info CommandOutput
+	}{
+		{"zap", caskInfoJSON("foo", `{"delete":`+entry+`}`)},
+		{"uninstall stanza", caskInfoCaskJSON("foo", `"artifacts":[{"uninstall":[{"delete":`+entry+`}]},{"app":["foo.app"]}]`)},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			appPath, _ := caskUninstallTestApp(t)
+			home := os.Getenv("HOME")
+			writeZapTestFiles(t, home, []string{
+				"Library/Application Support/Google/Chrome/NativeMessagingHosts/x",
+				"Library/Application Support/Google/Chrome/Default/Login Data",
+			})
+			runner := &zapStanzaRunner{token: "foo", appPath: appPath, infos: []CommandOutput{tt.info}}
+
+			res := UninstallApp(context.Background(), runner, zapTestApp(appPath), false)
+			if tt.name == "zap" {
+				requireZapLeftOut(t, res, runner, false, "Chrome/Default (browser profiles with passwords, bookmarks, and history)")
+				return
+			}
+			if res.Err == nil || !strings.Contains(res.Err.Error(), "its uninstall steps") || !strings.Contains(res.Err.Error(), "browser profiles") {
+				t.Fatalf("uninstall error = %v, want the uninstall stanza refused", res.Err)
+			}
+			requireZapNotRun(t, runner, appPath)
+		})
+	}
+}
