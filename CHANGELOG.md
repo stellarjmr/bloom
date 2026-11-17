@@ -10,6 +10,8 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 
 ## Unreleased
 
+## v0.6.29 - 2026-11-17
+
 ### Added
 
 - Update the Antigravity CLI with `agy update` as the new `agy` task. An `agy` linked from the `antigravity-cli` Homebrew cask is skipped because the `cask` task already upgrades it. Configs saved by earlier versions pick the task up.
