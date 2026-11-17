@@ -155,7 +155,10 @@ var defaultAppDirs = []string{
 }
 
 type officialUninstallerRule struct {
-	Vendor         string
+	Vendor string
+	// BundleIDs match exactly, for a vendor whose standalone products share
+	// the prefix of the one that installs services.
+	BundleIDs      []string
 	BundlePrefixes []string
 	NameFragments  []string
 }
@@ -171,7 +174,10 @@ var officialUninstallerRules = []officialUninstallerRule{
 	// extension behind when only the app moves to Trash. The IDs follow
 	// Mole's list; the Bitdefender, Intego, Norton, and Trend Micro ones are
 	// unconfirmed there, and a wrong ID only matches nothing.
-	{Vendor: "TeamViewer", BundlePrefixes: []string{"com.teamviewer."}},
+	// TeamViewer and TeamViewer Host install their services from a package.
+	// QuickSupport (TeamViewerQS), QuickJoin (TeamViewerQJ), and TeamViewer
+	// Meeting (blizz) are plain apps that the generic path removes whole.
+	{Vendor: "TeamViewer", BundleIDs: []string{"com.teamviewer.TeamViewer", "com.teamviewer.TeamViewerHost", "com.teamviewer.TeamViewerUninstaller"}, BundlePrefixes: []string{"com.teamviewer.TeamViewer.", "com.teamviewer.TeamViewerHost."}},
 	{Vendor: "Adobe Genuine Service", BundlePrefixes: []string{"com.adobe.gcclient", "gocart."}, NameFragments: []string{"adobe genuine service"}},
 	{Vendor: "Avast", BundlePrefixes: []string{"com.avast.aafm", "com.avast.avast", "com.avast.hub"}},
 	{Vendor: "AVG", BundlePrefixes: []string{"com.avg.hub"}, NameFragments: []string{"avgantivirus", "avg antivirus"}},
@@ -463,6 +469,11 @@ func officialUninstallerVendor(app AppEntry) string {
 	name := strings.ToLower(app.Name)
 	pathName := strings.ToLower(appBundleBaseName(app.Path))
 	for _, rule := range officialUninstallerRules {
+		for _, id := range rule.BundleIDs {
+			if bundleID != "" && bundleID == strings.ToLower(id) {
+				return rule.Vendor
+			}
+		}
 		for _, prefix := range rule.BundlePrefixes {
 			if prefix != "" && strings.HasPrefix(bundleID, strings.ToLower(prefix)) {
 				return rule.Vendor

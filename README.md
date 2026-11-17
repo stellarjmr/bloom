@@ -135,7 +135,7 @@ After the batch completes Bloom rewrites the Dock plist, restarts Dock when need
 
 Apple system bundles (Finder, Mail, Safari, etc.) are protected and never appear in the menu.
 
-Security, device-management, and remote-access apps that install their own daemons, privileged helpers, or system extensions are refused with a pointer to the vendor's own uninstaller, because moving only the app to Trash would leave those components running. This covers CrowdStrike, SentinelOne, ESET, Jamf, GlobalProtect, Cisco Secure Client, TeamViewer, Adobe Genuine Service, Alibaba Cloud Security, and the Avast, AVG, Malwarebytes, Bitdefender, Intego, Kaspersky, Norton, and Trend Micro security suites. Apps are recognized by bundle ID, and the Bitdefender, Intego, Norton, and Trend Micro IDs are not yet confirmed against the shipping apps, so a copy with another ID is treated as an ordinary app.
+Security, device-management, and remote-access apps that install their own daemons, privileged helpers, or system extensions are refused with a pointer to the vendor's own uninstaller, because moving only the app to Trash would leave those components running. This covers CrowdStrike, SentinelOne, ESET, Jamf, GlobalProtect, Cisco Secure Client, TeamViewer and TeamViewer Host (QuickSupport, QuickJoin, and TeamViewer Meeting are plain apps and uninstall normally), Adobe Genuine Service, Alibaba Cloud Security, and the Avast, AVG, Malwarebytes, Bitdefender, Intego, Kaspersky, Norton, and Trend Micro security suites. Apps are recognized by bundle ID, and the Bitdefender, Intego, Norton, and Trend Micro IDs are not yet confirmed against the shipping apps, so a copy with another ID is treated as an ordinary app.
 
 ## History
 

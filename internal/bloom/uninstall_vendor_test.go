@@ -11,6 +11,7 @@ func TestOfficialUninstallerVendorCoversSecurityAndRemoteAccessApps(t *testing.T
 		name, bundleID, want string
 	}{
 		{"TeamViewer", "com.teamviewer.TeamViewer", "TeamViewer"},
+		{"TeamViewerHost", "com.teamviewer.TeamViewerHost", "TeamViewer"},
 		{"Adobe Genuine Service", "com.adobe.gcclient.app", "Adobe Genuine Service"},
 		{"Avast Security", "com.avast.avast", "Avast"},
 		{"Avast One", "com.avast.hub", "Avast"},
@@ -32,6 +33,9 @@ func TestOfficialUninstallerVendorCoversSecurityAndRemoteAccessApps(t *testing.T
 		{"AliyunDrive", "com.alibaba.aliyun.drive", ""},
 		{"Adobe Photoshop", "com.adobe.Photoshop", ""},
 		{"Avast Passwords", "com.avast.passwords", ""},
+		{"TeamViewer QuickSupport", "com.teamviewer.TeamViewerQS", ""},
+		{"TeamViewer QuickJoin", "com.teamviewer.TeamViewerQJ", ""},
+		{"TeamViewerMeeting", "com.teamviewer.blizz", ""},
 	}
 	for _, tt := range cases {
 		app := AppEntry{Name: tt.name, BundleID: tt.bundleID, Path: "/Applications/" + tt.name + ".app"}
