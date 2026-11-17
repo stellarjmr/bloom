@@ -311,7 +311,15 @@ func TestUninstallAppLeavesOutZapThatReachesTheUsersFiles(t *testing.T) {
 			name:  "a literal non-ASCII name after a wildcard",
 			zap:   `{"trash":"~/Documents/Zoo*/über"}`,
 			files: []string{"Documents/Zoom/Über/notes.txt"},
-			want:  "Zoom/über (in your Documents folder)",
+			// The lookup finds Über only where the volume folds case, as the
+			// default APFS one does; Linux CI's file system does not, and
+			// there Homebrew's lookup would not find it either.
+			setup: func(t *testing.T, home string) {
+				if _, err := os.Lstat(filepath.Join(home, "Documents", "Zoom", "über")); err != nil {
+					t.Skipf("this file system compares names by case: %v", err)
+				}
+			},
+			want: "Zoom/über (in your Documents folder)",
 		},
 		{
 			name:  "a recursive glob under a parent folder linked into Documents",
