@@ -239,7 +239,7 @@ func logUninstallResult(res UninstallResult) {
 		if res.BrewRemoved {
 			status = "ok"
 		}
-		logUninstallEvent(appName, "command", status, "0", brewCaskZapCommand(res.BrewCask))
+		logUninstallEvent(appName, "command", status, "0", brewCaskUninstallCommand(res))
 	}
 	for _, moved := range res.Moved {
 		logUninstallEvent(appName, "moved", "ok", cleanLogSize(moved.SizeKB), moved.Path)

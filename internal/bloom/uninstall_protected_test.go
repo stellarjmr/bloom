@@ -80,22 +80,42 @@ func TestUninstallAppKeepsTheSteamLibrary(t *testing.T) {
 	}
 }
 
-func TestUninstallSteamCaskRefusesZapThatReachesTheLibrary(t *testing.T) {
+// The steam cask's zap trashes the library, so Homebrew's uninstall runs
+// without --zap and the library stays; Bloom moves the rest.
+func TestUninstallSteamCaskLeavesOutZapThatReachesTheLibrary(t *testing.T) {
 	for _, dryRun := range []bool{true, false} {
 		t.Run(map[bool]string{true: "dry run", false: "uninstall"}[dryRun], func(t *testing.T) {
-			_, appPath, library, _ := steamTestHome(t, "Steam")
-			runner := &namedCaskRunner{token: "steam", appPath: appPath, zapRemovePaths: []string{appPath, library}}
+			_, appPath, library, cache := steamTestHome(t, "Steam")
+			runner := &namedCaskRunner{token: "steam", appPath: appPath, uninstallRemovePaths: []string{appPath}, zapRemovePaths: []string{library}}
 
 			res := UninstallApp(context.Background(), runner, AppEntry{Path: appPath, Name: "Steam", BundleID: "com.valvesoftware.steam"}, dryRun)
-			if res.Err == nil || !strings.Contains(res.Err.Error(), "refusing Homebrew --zap for steam") || !strings.Contains(res.Err.Error(), library) {
-				t.Fatalf("uninstall error = %v, want a zap refusal naming the library", res.Err)
+			if res.Err != nil {
+				t.Fatalf("uninstall error = %v", res.Err)
 			}
-			if runnerCallContains(runner.calls, "brew uninstall") {
+			if !res.ZapSkipped || brewCaskUninstallCommand(res) != "brew uninstall --cask --force steam" {
+				t.Fatalf("zap left out = %v, command = %q", res.ZapSkipped, brewCaskUninstallCommand(res))
+			}
+			if runnerCallContains(runner.calls, "--zap") {
 				t.Fatalf("brew zap ran against the Steam library: %#v", runner.calls)
 			}
-			for _, path := range []string{appPath, library} {
-				if _, err := os.Lstat(path); err != nil {
-					t.Fatalf("refused uninstall changed %q: %v", path, err)
+			if _, err := os.Stat(filepath.Join(library, "steamapps", "common", "Game", "game.bin")); err != nil {
+				t.Fatalf("the Steam library was touched: %v", err)
+			}
+			if len(res.KeptData) != 1 || res.KeptData[0].Path != library {
+				t.Fatalf("KeptData = %#v, want the Steam library", res.KeptData)
+			}
+			if dryRun {
+				if runnerCallContains(runner.calls, "brew uninstall") {
+					t.Fatalf("a dry run ran brew uninstall: %#v", runner.calls)
+				}
+				return
+			}
+			if !runnerCallContains(runner.calls, "brew uninstall --cask --force steam") {
+				t.Fatalf("brew uninstall did not run: %#v", runner.calls)
+			}
+			for _, path := range []string{appPath, cache} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatalf("%q stayed: %v", path, err)
 				}
 			}
 		})
@@ -118,11 +138,14 @@ func TestUninstallTrashSinkRefusesTheSteamLibrary(t *testing.T) {
 // namedCaskRunner answers Homebrew's cask queries for one installed cask
 // token, so a test can use the real token of the app it models.
 type namedCaskRunner struct {
-	token          string
-	appPath        string
-	zapRemovePaths []string
-	uninstalled    bool
-	calls          []string
+	token   string
+	appPath string
+	// uninstallRemovePaths go on any brew uninstall, zapRemovePaths only
+	// with --zap.
+	uninstallRemovePaths []string
+	zapRemovePaths       []string
+	uninstalled          bool
+	calls                []string
 }
 
 func (r *namedCaskRunner) LookPath(file string) (string, error) {
@@ -143,8 +166,16 @@ func (r *namedCaskRunner) Run(_ context.Context, name string, args ...string) Co
 		return CommandOutput{Stdout: r.token + "\n"}
 	case "brew info --cask " + r.token:
 		return CommandOutput{Stdout: r.appPath + "\n"}
+	case "brew info --json=v2 --cask " + r.token:
+		return caskInfoJSON(r.token, "")
 	case "brew uninstall --cask --force --zap " + r.token:
-		for _, path := range r.zapRemovePaths {
+		for _, path := range append(append([]string{}, r.uninstallRemovePaths...), r.zapRemovePaths...) {
+			_ = os.RemoveAll(path)
+		}
+		r.uninstalled = true
+		return CommandOutput{}
+	case "brew uninstall --cask --force " + r.token:
+		for _, path := range r.uninstallRemovePaths {
 			_ = os.RemoveAll(path)
 		}
 		r.uninstalled = true

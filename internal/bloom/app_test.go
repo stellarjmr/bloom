@@ -2453,6 +2453,8 @@ func (r *brewCaskUninstallRunner) Run(_ context.Context, name string, args ...st
 		return CommandOutput{Stdout: "foo\n"}
 	case "brew info --cask foo":
 		return CommandOutput{Stdout: r.appPath + "\n"}
+	case "brew info --json=v2 --cask foo":
+		return caskInfoJSON("foo", "")
 	case "brew uninstall --cask --force --zap foo":
 		for _, path := range r.uninstallRemovePaths {
 			_ = os.RemoveAll(path)

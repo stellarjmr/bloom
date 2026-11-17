@@ -36,7 +36,7 @@ bm uninstall --dry-run --app /Applications/<brew-cask-app>.app
 Confirm that:
 
 - Duplicate copies of the same app do not appear in the uninstall list.
-- A detected Homebrew cask shows `would run: brew uninstall --cask --force --zap <token>` during dry-run.
+- A detected Homebrew cask shows `would run: brew uninstall --cask --force --zap <token>` during dry-run, or the same without `--zap` and a `left out --zap` line when the zap would reach your files, `~/.config`, or kept data.
 - Apple system apps are absent from the menu/list.
 - The uninstall path does not trigger macOS password, authorization, Finder, or AppleScript prompts.
 

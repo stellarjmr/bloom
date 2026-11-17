@@ -17,10 +17,12 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 ### Changed
 
 - A config whose task `order` was edited by hand, for example to leave `amp` out, now picks up newly added tasks such as `claude` and `agy` too. Such an `order` used to stay as written, so `bm update` never ran `claude update` there. A `[tasks.<name>]` section with `enabled = false` keeps a new task off. v0.6.28 wrote that section for `claude` whenever it saved such a config; select `claude` under `bm config` → Tasks to turn it on.
+- Uninstall the `steam` cask without `--zap` instead of refusing it. v0.6.28 refused that cask because its zap trashes the Steam library, and pointed to `brew uninstall --cask steam` without `--zap`; Bloom now runs that itself, keeps the library, and moves Steam's other leftovers to Trash.
 
 ### Fixed
 
 - Keep what tools install under `~/Library/Caches`. `bm clean` swept `camoufox` and `Cypress`, where Camoufox and Cypress keep the browser and test runner they launch, so every run failed until a download of a gigabyte or more, and `Buzz`, which holds Buzz's downloaded Whisper models and installed plugins. All three are now protected, whatever the whitelist says.
+- Stop Homebrew's cask uninstall from taking your own files. Zap lists reach past an app's Library data: every Ableton Live cask trashes `~/Music/Ableton`, Actual's trashes `~/Documents/Actual` with its budget files, OmniGraffle's trashes its iCloud Drive folder, Dropbox's trashes `~/Library/CloudStorage/Dropbox`, and over a hundred casks trash their folder in `~/.config`. `bm uninstall` now reads the uninstall and zap steps Homebrew will run. When only the zap would trash or delete something that exists in Desktop, Documents, Downloads, Movies, Music, Pictures, Public, iCloud Drive, a cloud storage folder, `~/.config`, or data Bloom keeps, Bloom runs `brew uninstall --cask` without `--zap`, moves its own leftover list to Trash, and the summary names what the zap would have taken. A few casks' plain uninstall steps reach such data too, such as Final Fantasy XIV's folder under `~/Documents/My Games`; those run with or without `--zap`, so Bloom refuses the cask, as it does when it cannot read the steps.
 - Look for Apple Configurator firmware only in Configurator's own group containers. To find the `.ipsw` files that rule covers, `bm clean` walked every app's folder under `~/Library/Group Containers` on each run, which took longer the more apps were installed and read other apps' data on the way.
 
 ## v0.6.28 - 2026-11-03

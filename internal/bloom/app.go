@@ -902,12 +902,19 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 			brewNote = "  [brew cask]"
 		}
 		fmt.Fprintf(a.Out, "%s %s  %s  (%d files)%s\n", marker, appName, FormatBytes(res.RemovedKB), len(res.Files), brewNote)
-		if command := brewCaskZapCommand(res.BrewCask); command != "" {
+		if command := brewCaskUninstallCommand(res); command != "" {
 			verb := "ran"
 			if dryRun {
 				verb = "would run"
 			}
 			fmt.Fprintf(a.Out, "   %s: %s\n", verb, command)
+		}
+		if res.ZapSkipped {
+			if extra := keptPathsNotIn(res.ZapKept, res.KeptData); len(extra) > 0 {
+				fmt.Fprintf(a.Out, "   left out --zap, which would also remove %s\n", keptPathList(extra))
+			} else {
+				fmt.Fprintln(a.Out, "   left out --zap, which would also remove the kept data below")
+			}
 		}
 		if res.SharedBundleSibling {
 			fmt.Fprintln(a.Out, "   kept shared app data because another installed copy uses the same bundle ID")
@@ -967,6 +974,33 @@ func (a *App) printUninstallSummary(summary BatchSummary, dryRun bool, showFiles
 		}
 	}
 	return processed, failures
+}
+
+// keptPathsNotIn returns the items whose paths shown does not already list.
+func keptPathsNotIn(items, shown []UninstallKeptPath) []UninstallKeptPath {
+	var out []UninstallKeptPath
+	for _, item := range items {
+		listed := false
+		for _, other := range shown {
+			if strings.EqualFold(other.Path, item.Path) {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// keptPathList joins kept paths with their reasons for a summary line.
+func keptPathList(items []UninstallKeptPath) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, item.Path+" ("+item.Reason+")")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func confirmUninstall(in io.Reader, out io.Writer) bool {

@@ -74,6 +74,31 @@ type UninstallResult struct {
 	// AppPathErr records why the app path could not be checked after the
 	// bundle moved to Trash; the remaining data was kept as for a return.
 	AppPathErr error
+	// ZapSkipped records that Homebrew's uninstall runs without --zap,
+	// because the zap would also remove ZapKept: the user's own files,
+	// ~/.config, or protected data.
+	ZapSkipped bool
+	ZapKept    []UninstallKeptPath
+}
+
+// skipZap leaves --zap out of the cask's uninstall and records why.
+func (res *UninstallResult) skipZap(items []UninstallKeptPath) {
+	if len(items) == 0 {
+		return
+	}
+	res.ZapSkipped = true
+	for _, item := range items {
+		known := false
+		for _, kept := range res.ZapKept {
+			if strings.EqualFold(kept.Path, item.Path) {
+				known = true
+				break
+			}
+		}
+		if !known {
+			res.ZapKept = append(res.ZapKept, item)
+		}
+	}
 }
 
 // uninstallBundleMovedHook lets tests stand in for an updater that puts the
@@ -589,6 +614,9 @@ type UninstallKeptPath struct {
 type protectedUninstallDataRoot struct {
 	path   string
 	reason string
+	// uninstallExempt lists paths inside the root, relative to it, that the
+	// owning cask's uninstall stanza removes as part of the app itself.
+	uninstallExempt []string
 }
 
 func protectedUninstallDataRoots(home string) []protectedUninstallDataRoot {
@@ -596,7 +624,7 @@ func protectedUninstallDataRoots(home string) []protectedUninstallDataRoot {
 		// Steam's name match reaches this folder, which holds the installed
 		// game library (steamapps) and local saves (userdata). The steam
 		// cask's zap lists it too.
-		{path: filepath.Join(home, "Library", "Application Support", "Steam"), reason: "the Steam library with installed games and saves"},
+		{path: filepath.Join(home, "Library", "Application Support", "Steam"), reason: "the Steam library with installed games and saves", uninstallExempt: []string{"Steam.AppBundle"}},
 	}
 }
 
@@ -616,15 +644,6 @@ func protectedUninstallData(path string) (UninstallKeptPath, bool) {
 		}
 	}
 	return UninstallKeptPath{}, false
-}
-
-func protectedDataZapRefusal(cask string, kept []UninstallKeptPath) error {
-	parts := make([]string, 0, len(kept))
-	for _, item := range kept {
-		parts = append(parts, item.Path+" ("+item.Reason+")")
-	}
-	return fmt.Errorf("refusing Homebrew --zap for %s because it would also remove %s; run brew uninstall --cask %s without --zap to keep it",
-		cask, strings.Join(parts, ", "), cask)
 }
 
 // leftoverFamily describes the other installed builds of an app that its
@@ -1230,6 +1249,14 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		res.Err = familyZapRefusal(res.FamilyBuilds)
 		return res
 	}
+	if cask != "" {
+		zapReach, err := caskZapDecision(ctx, runner, cask)
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		res.skipZap(zapReach)
+	}
 
 	var paths []string
 	loginItemHelpers := []string(nil)
@@ -1247,9 +1274,8 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 		loginItemHelpers = discoverLoginItemHelperBundleIDs(app.Path)
 		// The cask's zap reaches the same folders by name, so a protected
 		// folder that Bloom's own rules matched must not meet --zap either.
-		if cask != "" && len(res.KeptData) > 0 {
-			res.Err = protectedDataZapRefusal(cask, res.KeptData)
-			return res
+		if cask != "" {
+			res.skipZap(res.KeptData)
 		}
 	}
 	pathSizes := make(map[string]int64, len(paths))
@@ -1310,10 +1336,15 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			return res
 		}
 		if cask != "" {
+			zapReach, err := caskZapDecision(ctx, runner, cask)
+			if err != nil {
+				res.Err = err
+				return res
+			}
+			res.skipZap(zapReach)
 			if liveKept := findRelatedPaths(app, family).keptData; len(liveKept) > 0 {
 				res.KeptData = liveKept
-				res.Err = protectedDataZapRefusal(cask, liveKept)
-				return res
+				res.skipZap(liveKept)
 			}
 		}
 
@@ -1321,12 +1352,22 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 			res.StillRunning = stopApp(ctx, runner, app, siblingScan.FamilyExecutables)
 		}
 		if cask != "" {
+			// Quitting the app can take its whole save window and may write
+			// files the zap would then take, such as a document saved from
+			// the save prompt, so the stanzas are judged again right before
+			// brew runs. A zap left out at plan time stays out.
+			zapReach, err := caskZapDecision(ctx, runner, cask)
+			if err != nil {
+				res.Err = err
+				return res
+			}
+			res.skipZap(zapReach)
 			// Homebrew's own record decides, not its exit status. A cask it no
 			// longer lists is gone. One it still lists, or a list that cannot
 			// be read, means brew could not run or stopped part way; moving
 			// the bundle anyway would leave a receipt that a later
 			// brew upgrade --cask can reinstall the app from.
-			out := runner.Run(ctx, "brew", "uninstall", "--cask", "--force", "--zap", cask)
+			out := runner.Run(ctx, "brew", brewCaskUninstallArgs(cask, !res.ZapSkipped)...)
 			listed, listErr := brewCaskListed(ctx, runner, cask)
 			if listErr != nil || listed {
 				res.Err = brewCaskUninstallError(cask, out, listErr)
@@ -1458,11 +1499,23 @@ func UninstallApp(ctx context.Context, runner Runner, app AppEntry, dryRun bool)
 	return res
 }
 
-func brewCaskZapCommand(cask string) string {
-	if cask == "" {
+// brewCaskUninstallArgs is Homebrew's uninstall of cask, with --zap unless
+// the zap would take data Bloom keeps.
+func brewCaskUninstallArgs(cask string, zap bool) []string {
+	args := []string{"uninstall", "--cask", "--force"}
+	if zap {
+		args = append(args, "--zap")
+	}
+	return append(args, cask)
+}
+
+// brewCaskUninstallCommand is the command line Bloom runs, or would run, for
+// the app's cask.
+func brewCaskUninstallCommand(res UninstallResult) string {
+	if res.BrewCask == "" {
 		return ""
 	}
-	return fmt.Sprintf("brew uninstall --cask --force --zap %s", cask)
+	return "brew " + strings.Join(brewCaskUninstallArgs(res.BrewCask, !res.ZapSkipped), " ")
 }
 
 // BatchUninstall uninstalls a list of apps and then runs shared post-batch

@@ -39,6 +39,8 @@ func (r *scriptedCaskRunner) Run(_ context.Context, name string, args ...string)
 		return CommandOutput{Stdout: r.token + "\n"}
 	case "brew info --cask " + r.token:
 		return CommandOutput{Stdout: r.appPath + "\n"}
+	case "brew info --json=v2 --cask " + r.token:
+		return caskInfoJSON(r.token, "")
 	case "brew uninstall --cask --force --zap " + r.token:
 		r.ranUninstall = true
 		for _, path := range r.removeOnUninstall {
