@@ -395,7 +395,12 @@ func printCleanResult(out, errOut io.Writer, res CleanResult) {
 		fmt.Fprintf(out, "Whitelist: %d patterns active\n", len(res.Whitelist))
 	}
 	if len(res.Targets) == 0 {
-		fmt.Fprintln(out, "System already clean; no files moved.")
+		if len(res.Failed) > 0 {
+			// Every move failed, for example in a shell that may not write.
+			fmt.Fprintln(out, "No files moved.")
+		} else {
+			fmt.Fprintln(out, "System already clean; no files moved.")
+		}
 	} else {
 		marker := "✓"
 		if res.DryRun {

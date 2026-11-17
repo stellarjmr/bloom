@@ -144,6 +144,34 @@ func TestPrintCleanResultGroupsTargetsByLabel(t *testing.T) {
 	}
 }
 
+// A clean whose every Trash move failed, as in a shell that may not write,
+// must not read as a clean system.
+func TestPrintCleanResultDoesNotCallAFailedCleanClean(t *testing.T) {
+	res := CleanResult{Failed: []CleanSkip{
+		{Path: "/Users/test/Library/Caches/Zed", Reason: "Trash unavailable: operation not permitted"},
+	}}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	printCleanResult(&stdout, &stderr, res)
+	if strings.Contains(stdout.String(), "already clean") {
+		t.Fatalf("a failed clean was reported as clean: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "No files moved.") {
+		t.Fatalf("stdout = %q, want it to say nothing moved", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "✗ /Users/test/Library/Caches/Zed: Trash unavailable") {
+		t.Fatalf("stderr = %q, want the failure", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	printCleanResult(&stdout, &stderr, CleanResult{})
+	if !strings.Contains(stdout.String(), "System already clean; no files moved.") {
+		t.Fatalf("an empty clean lost its message: %q", stdout.String())
+	}
+}
+
 func TestRunCleanStopsWhenConfigLinkIsBroken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
