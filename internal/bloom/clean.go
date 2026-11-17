@@ -1139,18 +1139,31 @@ func expandCleanRulePattern(pattern string) []string {
 	return existingCleanPaths(matches)
 }
 
+// recursiveGlobMaxEntries bounds the entries one "**" expansion may visit.
+const recursiveGlobMaxEntries = 20000
+
+// recursiveGlob expands a pattern holding "**". The walk starts at the static
+// root and enters a folder only while each of its components matches the
+// pattern component written at that depth before the "**". Without that, the
+// Apple Configurator rule read every app's group container on each clean.
 func recursiveGlob(pattern string) []string {
 	root := staticGlobRoot(pattern)
 	if root == "" {
 		return nil
 	}
+	prefix := recursiveGlobPrefix(pattern, root)
 	var matches []string
+	visited := 0
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if len(matches) >= 2000 {
+		visited++
+		if len(matches) >= 2000 || visited > recursiveGlobMaxEntries {
 			return filepath.SkipAll
+		}
+		if d.IsDir() && path != root && !recursiveGlobPrefixAllows(path, root, prefix) {
+			return filepath.SkipDir
 		}
 		if shellPatternMatch(pattern, path) {
 			matches = append(matches, path)
@@ -1166,6 +1179,42 @@ func recursiveGlob(pattern string) []string {
 		return nil
 	})
 	return existingCleanPaths(matches)
+}
+
+// recursiveGlobPrefix returns the components pattern names between root and
+// its first "**" component.
+func recursiveGlobPrefix(pattern, root string) []string {
+	rest, ok := strings.CutPrefix(pattern, root+string(os.PathSeparator))
+	if !ok {
+		return nil
+	}
+	var prefix []string
+	for _, component := range strings.Split(rest, string(os.PathSeparator)) {
+		if strings.Contains(component, "**") {
+			break
+		}
+		prefix = append(prefix, component)
+	}
+	return prefix
+}
+
+// recursiveGlobPrefixAllows reports whether a folder below root can still
+// lead to a match: its components must match prefix depth by depth, and any
+// depth past the prefix belongs to the "**".
+func recursiveGlobPrefixAllows(path, root string, prefix []string) bool {
+	rel, ok := cleanRelUnder(path, root)
+	if !ok || rel == "." {
+		return false
+	}
+	for i, component := range strings.Split(rel, string(os.PathSeparator)) {
+		if i >= len(prefix) {
+			return true
+		}
+		if matched, err := filepath.Match(prefix[i], component); err != nil || !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func staticGlobRoot(pattern string) string {

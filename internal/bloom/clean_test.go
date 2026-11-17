@@ -1379,6 +1379,32 @@ func TestRunCleanKeepsGoogleIdentityAndClearcutState(t *testing.T) {
 	}
 }
 
+// The Configurator firmware rule names one app's group containers. Expanding
+// it must not read every other app's group container on the way: a decoy
+// inside another container, which the pattern text alone would accept, stays
+// out of the result.
+func TestRecursiveGlobEntersOnlyFoldersThePatternNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	groups := filepath.Join(home, "Library", "Group Containers")
+	firmware := filepath.Join(groups, "K36BKF7T3D.group.com.apple.configurator", "Library", "Caches", "Firmware", "iPhone17,1_26.1_Restore.ipsw")
+	decoy := filepath.Join(groups, "UBF8T346G9.Office", "K36BKF7T3D.group.com.apple.configurator", "Old", "decoy.ipsw")
+	unrelated := filepath.Join(groups, "6N38VWS5BX.ru.keepcoder.Telegram", "account", "media.ipsw")
+	for _, path := range []string{firmware, decoy, unrelated} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("ipsw"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := expandCleanRulePattern("~/Library/Group Containers/*.group.com.apple.configurator/**/*.ipsw")
+	if len(got) != 1 || got[0] != firmware {
+		t.Fatalf("expanded %v, want only %s", got, firmware)
+	}
+}
+
 // Camoufox and Cypress run the browser and test runner they install under
 // ~/Library/Caches, and Buzz keeps downloaded models there; the user cache
 // sweep must keep each of them, even with an empty whitelist.

@@ -21,6 +21,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 ### Fixed
 
 - Keep what tools install under `~/Library/Caches`. `bm clean` swept `camoufox` and `Cypress`, where Camoufox and Cypress keep the browser and test runner they launch, so every run failed until a download of a gigabyte or more, and `Buzz`, which holds Buzz's downloaded Whisper models and installed plugins. All three are now protected, whatever the whitelist says.
+- Look for Apple Configurator firmware only in Configurator's own group containers. To find the `.ipsw` files that rule covers, `bm clean` walked every app's folder under `~/Library/Group Containers` on each run, which took longer the more apps were installed and read other apps' data on the way.
 
 ## v0.6.28 - 2026-11-03
 
