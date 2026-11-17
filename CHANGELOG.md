@@ -26,6 +26,7 @@ Bloom records user-visible fixes, behavior changes, and features here so release
 - Uninstall TeamViewer QuickSupport, QuickJoin, and TeamViewer Meeting again. v0.6.28 sent every app with a `com.teamviewer.` Bundle ID to TeamViewer's own uninstaller, but these are plain apps without services; only TeamViewer and TeamViewer Host still need it.
 - Say `No files moved.` when every Trash move of a clean failed, for example in a shell that may not write. `bm clean` listed the failures and exited with an error but still headed its summary `System already clean`.
 - Show a size that rounds up to 1024 MB as `1.0G` rather than `1024.0M`, in clean and uninstall summaries and in the Uninstall menu.
+- Always move cleaned and uninstalled items to your own Trash. An exported `BLOOM_TEST_TRASH_DIR`, meant only for Bloom's tests, sent them into the folder it named instead, and stopped a root-owned app bundle from getting its administrator-authorized move.
 - Look for Apple Configurator firmware only in Configurator's own group containers. To find the `.ipsw` files that rule covers, `bm clean` walked every app's folder under `~/Library/Group Containers` on each run, which took longer the more apps were installed and read other apps' data on the way.
 
 ## v0.6.28 - 2026-11-03

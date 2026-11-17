@@ -2459,7 +2459,7 @@ func moveAppBundleToTrash(ctx context.Context, runner Runner, appPath, expectedI
 	if err == nil {
 		return nil
 	}
-	if os.Getenv("BLOOM_TEST_TRASH_DIR") != "" {
+	if testTrashDir() != "" {
 		return err
 	}
 	return moveAppBundleToTrashWithAdmin(ctx, runner, appPath, expectedIdentity)

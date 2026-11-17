@@ -2121,11 +2121,24 @@ func movePathToTrash(ctx context.Context, runner Runner, path string) error {
 	return movePathToTrashWithIdentity(ctx, runner, path, "")
 }
 
+// honorTestTrashDir lets BLOOM_TEST_TRASH_DIR stand in for the user's Trash.
+// Only the package's tests set it, so an exported variable can never send a
+// real clean or uninstall into another folder.
+var honorTestTrashDir = false
+
+// testTrashDir returns the test Trash folder, or "" outside tests.
+func testTrashDir() string {
+	if !honorTestTrashDir {
+		return ""
+	}
+	return os.Getenv("BLOOM_TEST_TRASH_DIR")
+}
+
 func movePathToTrashWithIdentity(ctx context.Context, runner Runner, path, expectedIdentity string) error {
 	if err := validateTrashMovePath(path); err != nil {
 		return err
 	}
-	if testTrash := os.Getenv("BLOOM_TEST_TRASH_DIR"); testTrash != "" {
+	if testTrash := testTrashDir(); testTrash != "" {
 		return movePathIntoTrashDirChecked(path, testTrash, expectedIdentity)
 	}
 	home, err := os.UserHomeDir()
